@@ -379,6 +379,11 @@ fn invite_only_and_closed_registration() {
 #[test]
 fn auth_endpoints_are_rate_limited() {
     let s = spawn(|c| c.auth_requests_per_minute = 3);
+    // The limiter uses fixed one-minute windows; don't let the requests straddle a boundary.
+    let into_minute = simplus_sync_server::db::now() % 60;
+    if into_minute > 50 {
+        std::thread::sleep(std::time::Duration::from_secs((61 - into_minute) as u64));
+    }
     for _ in 0..3 {
         assert_eq!(s.post("/v1/prelogin", None, &json!({"email": "x@example.com"})).status, 200);
     }
