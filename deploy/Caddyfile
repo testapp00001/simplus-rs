@@ -1,0 +1,5 @@
+# Replace with your own domain. Caddy obtains and renews the TLS certificate automatically.
+sync.example.com {
+	encode gzip
+	reverse_proxy simplus-sync:8080
+}
