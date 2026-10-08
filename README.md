@@ -35,3 +35,13 @@ Data lives in `%LOCALAPPDATA%\Simplus` on Windows (`~/.local/share/simplus` on L
 - **Safety**: auto-lock after inactivity and when Windows locks. Copied secrets are kept out of Win+V history and cleared after 30 s.
 - **Import / export**: Bitwarden (JSON/CSV), Chrome/Edge, Firefox, KeePassXC and generic CSV; encrypted `.simplusvault` backups; plain CSV export behind a warning.
 - **Crypto**: Argon2id (64 MiB, 3 passes, 4 lanes) wraps random 256-bit keys, and every item is sealed separately with XChaCha20-Poly1305. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- **Sync (optional)**: end-to-end encrypted sync across your devices through a server you host yourself (or one you trust). Set it up in *Vault settings → Sync*, or choose "Sign in instead" on a new device. Conflicts never lose data, and password changes propagate to every device. See [docs/SYNC_PROTOCOL.md](docs/SYNC_PROTOCOL.md).
+
+## Sync server
+
+`server/simplus-sync-server` is the self-hostable sync server: one binary on SQLite, with Docker and Caddy examples and an admin CLI. See [docs/SELF_HOSTING.md](docs/SELF_HOSTING.md).
+
+```sh
+cargo run -p simplus-sync-server -- serve          # http://0.0.0.0:8080, data in ./data
+docker compose -f deploy/docker-compose.yml up -d  # with automatic HTTPS via Caddy
+```

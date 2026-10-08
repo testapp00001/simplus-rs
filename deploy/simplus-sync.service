@@ -1,0 +1,19 @@
+[Unit]
+Description=Simplus vault sync server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=simplus
+Group=simplus
+ExecStart=/usr/local/bin/simplus-sync-server --config /etc/simplus-sync.toml serve
+Restart=on-failure
+# Hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/simplus
+
+[Install]
+WantedBy=multi-user.target

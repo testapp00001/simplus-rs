@@ -135,6 +135,8 @@ struct SimplusHostV1 { u32 abi_version; Buf (*call)(HostCtx*, Str method, Buf pa
 
 ## 10. Sync server (`simplus-sync-server`) + vault sync client
 
+> Implemented. The authoritative description is [SYNC_PROTOCOL.md](SYNC_PROTOCOL.md); the notes below are the original design.
+
 - **Offline-first**: the local vault is the source of truth and sync is opt-in. In Settings the user picks the server URL (the official server by default, or a self-hosted one) and an account.
 - **Zero-knowledge**: the server stores only the account id, an auth verifier, KDF params/salts, the wrapped VK/NK (including the recovery-wrapped copies) and encrypted record blobs. It never sees MP1, MP2, VK or NK.
 - **Auth**: the client sends `AuthKey` (derived from MK1 via HKDF, separate from the encryption keys). The server stores Argon2id(AuthKey) and issues short-lived access tokens and per-device refresh tokens. The prelogin endpoint returns KDF params, including fake deterministic params for unknown users so accounts can't be enumerated. The device list supports revocation. A password change re-wraps VK and revokes the other devices' sessions.
