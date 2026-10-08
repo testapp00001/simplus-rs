@@ -27,6 +27,8 @@ pub enum VaultError {
     ItemNotFound(Uuid),
     #[error("vault data is corrupted or has been tampered with")]
     Corrupted,
+    #[error("the vault keys do not match this vault; a key bundle may have been tampered with")]
+    KeyMismatch,
     #[error("unsupported vault format version {0}")]
     UnsupportedVersion(u32),
     #[error("{0}")]

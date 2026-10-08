@@ -4,7 +4,9 @@ use chrono::Utc;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use simplus_core::db::rusqlite::Connection;
-use simplus_crypto::{CryptoError, KdfParams, KeySlot, SecretKey, SlotKind, open as open_sealed, seal};
+use simplus_crypto::{
+    CryptoError, KdfParams, KeySlot, SecretKey, SlotKind, hkdf_subkey, open as open_sealed, seal,
+};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -13,26 +15,33 @@ use crate::recovery::RecoveryKey;
 use crate::store::{self, ItemKind, ItemRow};
 use crate::{Result, VaultError};
 
-const FORMAT_VERSION: u32 = 1;
+pub(crate) const FORMAT_VERSION: u32 = 1;
 
-const META_FORMAT: &str = "format_version";
-const META_VAULT_ID: &str = "vault_id";
-const META_MASTER_SLOT: &str = "slot.master";
-const META_NOTES_SLOT: &str = "slot.notes";
-const META_RECOVERY_VAULT_SLOT: &str = "slot.recovery.vault_key";
-const META_RECOVERY_NOTES_SLOT: &str = "slot.recovery.notes_key";
+pub(crate) const META_FORMAT: &str = "format_version";
+pub(crate) const META_VAULT_ID: &str = "vault_id";
+pub(crate) const META_MASTER_SLOT: &str = "slot.master";
+pub(crate) const META_NOTES_SLOT: &str = "slot.notes";
+pub(crate) const META_RECOVERY_VAULT_SLOT: &str = "slot.recovery.vault_key";
+pub(crate) const META_RECOVERY_NOTES_SLOT: &str = "slot.recovery.notes_key";
+pub(crate) const SLOT_KEYS: [&str; 4] =
+    [META_MASTER_SLOT, META_NOTES_SLOT, META_RECOVERY_VAULT_SLOT, META_RECOVERY_NOTES_SLOT];
+const META_KEY_CHECK_VAULT: &str = "key_check.vault";
+const META_KEY_CHECK_NOTES: &str = "key_check.notes";
+/// Suffix of the backup kept for each slot while a server-supplied key bundle is unverified.
+pub(crate) const PREVIOUS_SUFFIX: &str = ".previous";
 
-const CTX_VAULT_KEY: &[u8] = b"simplus/vault/vault-key";
-const CTX_NOTES_KEY: &[u8] = b"simplus/vault/notes-key";
+pub(crate) const CTX_VAULT_KEY: &[u8] = b"simplus/vault/vault-key";
+pub(crate) const CTX_NOTES_KEY: &[u8] = b"simplus/vault/notes-key";
 const CTX_RECOVERY_VAULT_KEY: &[u8] = b"simplus/vault/recovery/vault-key";
 const CTX_RECOVERY_NOTES_KEY: &[u8] = b"simplus/vault/recovery/notes-key";
 const ITEM_AAD_PREFIX: &[u8] = b"simplus/vault/item/v1";
+const KEY_CHECK_INFO: &[u8] = b"simplus/vault/key-check/v1";
 
 /// An open vault file. Starts locked; [`Vault::unlock`] makes records readable and
 /// [`Vault::unlock_notes`] additionally makes secure notes readable.
 pub struct Vault {
     pub(crate) conn: Connection,
-    id: Uuid,
+    pub(crate) id: Uuid,
     pub(crate) kdf_params: KdfParams,
     pub(crate) vault_key: Option<SecretKey>,
     pub(crate) notes_key: Option<SecretKey>,
@@ -46,7 +55,7 @@ pub(crate) fn data_error(e: CryptoError) -> VaultError {
     }
 }
 
-fn wrong(password_error: VaultError) -> impl Fn(CryptoError) -> VaultError {
+pub(crate) fn wrong(password_error: VaultError) -> impl Fn(CryptoError) -> VaultError {
     move |e| match e {
         CryptoError::Decrypt => match &password_error {
             VaultError::WrongPassword => VaultError::WrongPassword,
@@ -86,13 +95,13 @@ pub(crate) fn encrypt_item<T: Serialize>(
     seal(key, &plain, &item_aad(kind, id, parent)).map_err(VaultError::Crypto)
 }
 
-fn decrypt_item<T: DeserializeOwned>(key: &SecretKey, kind: ItemKind, row: &ItemRow) -> Result<T> {
+pub(crate) fn decrypt_item<T: DeserializeOwned>(key: &SecretKey, kind: ItemKind, row: &ItemRow) -> Result<T> {
     let blob = row.blob.as_deref().ok_or(VaultError::Corrupted)?;
     let plain = open_sealed(key, blob, &item_aad(kind, row.id, row.parent_id)).map_err(data_error)?;
     serde_json::from_slice(&plain).map_err(|_| VaultError::Corrupted)
 }
 
-fn decrypt_record(key: &SecretKey, row: &ItemRow) -> Result<Record> {
+pub(crate) fn decrypt_record(key: &SecretKey, row: &ItemRow) -> Result<Record> {
     let record: Record = decrypt_item(key, ItemKind::Record, row)?;
     if record.id != row.id {
         return Err(VaultError::Corrupted);
@@ -100,7 +109,7 @@ fn decrypt_record(key: &SecretKey, row: &ItemRow) -> Result<Record> {
     Ok(record)
 }
 
-fn decrypt_note(key: &SecretKey, row: &ItemRow) -> Result<SecureNote> {
+pub(crate) fn decrypt_note(key: &SecretKey, row: &ItemRow) -> Result<SecureNote> {
     let note: SecureNote = decrypt_item(key, ItemKind::Note, row)?;
     if note.id != row.id || Some(note.record_id) != row.parent_id {
         return Err(VaultError::Corrupted);
@@ -108,12 +117,52 @@ fn decrypt_note(key: &SecretKey, row: &ItemRow) -> Result<SecureNote> {
     Ok(note)
 }
 
-fn load_slot(conn: &Connection, key: &str) -> Result<KeySlot> {
+pub(crate) fn load_slot(conn: &Connection, key: &str) -> Result<KeySlot> {
     KeySlot::from_bytes(&store::require_meta(conn, key)?).map_err(data_error)
 }
 
 fn write_slot(conn: &Connection, key: &str, slot: std::result::Result<KeySlot, CryptoError>) -> Result<()> {
     store::set_meta(conn, key, &slot.map_err(VaultError::Crypto)?.to_bytes())
+}
+
+/// Compares `key` with the fingerprint stored under `meta_key`, recording it if absent (vaults
+/// created before fingerprints existed). A mismatch means a key slot was replaced by one that
+/// wraps a different key, e.g. a tampered bundle from a sync server.
+pub(crate) fn verify_key_check(conn: &Connection, meta_key: &str, key: &SecretKey) -> Result<()> {
+    let expected = hkdf_subkey(key, KEY_CHECK_INFO);
+    match store::get_meta(conn, meta_key)? {
+        Some(stored) if stored.as_slice() == expected.expose() => Ok(()),
+        Some(_) => Err(VaultError::KeyMismatch),
+        None => store::set_meta(conn, meta_key, expected.expose()),
+    }
+}
+
+pub(crate) fn verify_vault_key(conn: &Connection, key: &SecretKey) -> Result<()> {
+    verify_key_check(conn, META_KEY_CHECK_VAULT, key)
+}
+
+pub(crate) fn verify_notes_key(conn: &Connection, key: &SecretKey) -> Result<()> {
+    verify_key_check(conn, META_KEY_CHECK_NOTES, key)
+}
+
+/// Puts back the slots that a server-supplied bundle replaced (see `apply_key_bundle`).
+fn restore_previous_slots(conn: &Connection) -> Result<()> {
+    for key in SLOT_KEYS {
+        let backup = format!("{key}{PREVIOUS_SUFFIX}");
+        if let Some(previous) = store::get_meta(conn, &backup)? {
+            store::set_meta(conn, key, &previous)?;
+            store::delete_meta(conn, &backup)?;
+        }
+    }
+    Ok(())
+}
+
+/// The new slots proved genuine; drop the backups.
+fn forget_previous_slots(conn: &Connection) -> Result<()> {
+    for key in SLOT_KEYS {
+        store::delete_meta(conn, &format!("{key}{PREVIOUS_SUFFIX}"))?;
+    }
+    Ok(())
 }
 
 fn remove_db_files(path: &Path) {
@@ -192,6 +241,8 @@ impl Vault {
             META_RECOVERY_NOTES_SLOT,
             KeySlot::seal_key(recovery.key(), &notes_key, CTX_RECOVERY_NOTES_KEY),
         )?;
+        verify_vault_key(&tx, &vault_key)?;
+        verify_notes_key(&tx, &notes_key)?;
         tx.commit()?;
 
         Ok((Self { conn, id, kdf_params: params, vault_key: Some(vault_key), notes_key: None }, recovery))
@@ -236,6 +287,8 @@ impl Vault {
         let notes_key = load_slot(&vault.conn, META_RECOVERY_NOTES_SLOT)?
             .open_key(recovery_key.key(), CTX_RECOVERY_NOTES_KEY)
             .map_err(wrong(VaultError::WrongRecoveryKey))?;
+        verify_vault_key(&vault.conn, &vault_key)?;
+        verify_notes_key(&vault.conn, &notes_key)?;
 
         let params = vault.kdf_params;
         let tx = vault.conn.transaction()?;
@@ -275,7 +328,21 @@ impl Vault {
         let key = load_slot(&self.conn, META_MASTER_SLOT)?
             .open_password(master_password.as_bytes(), CTX_VAULT_KEY)
             .map_err(wrong(VaultError::WrongPassword))?;
+        if let Err(e) = verify_vault_key(&self.conn, &key) {
+            // A key bundle received through sync wraps a different key: undo it.
+            restore_previous_slots(&self.conn)?;
+            self.refresh_kdf_params()?;
+            return Err(e);
+        }
+        forget_previous_slots(&self.conn)?;
         self.vault_key = Some(key);
+        Ok(())
+    }
+
+    pub(crate) fn refresh_kdf_params(&mut self) -> Result<()> {
+        if let SlotKind::Password { params, .. } = load_slot(&self.conn, META_MASTER_SLOT)?.kind() {
+            self.kdf_params = *params;
+        }
         Ok(())
     }
 
@@ -295,7 +362,11 @@ impl Vault {
         let key = load_slot(&self.conn, META_NOTES_SLOT)?
             .open_password(notes_password.as_bytes(), CTX_NOTES_KEY)
             .map_err(wrong(VaultError::WrongNotesPassword))?;
+        verify_notes_key(&self.conn, &key)?;
         self.notes_key = Some(key);
+        // Notes that lost a sync conflict while locked can now become conflict copies. Best
+        // effort: anything left over is retried at the next unlock.
+        let _ = self.resolve_pending_conflicts();
         Ok(())
     }
 

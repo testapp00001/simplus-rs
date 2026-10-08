@@ -4690,6 +4690,7 @@ dependencies = [
  "sha2 0.10.9",
  "simplus-core",
  "simplus-crypto",
+ "simplus-vault-proto",
  "tempfile",
  "thiserror 2.0.21",
  "uuid",

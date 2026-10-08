@@ -132,8 +132,10 @@ pub struct RegisterRequest {
     pub email: String,
     #[serde(with = "b64")]
     pub auth_key: Vec<u8>,
+    /// Proof of possessing the vault key (`HKDF(vault key)`), used to authorise a reset with
+    /// the recovery key.
     #[serde(with = "b64")]
-    pub recovery_auth_key: Vec<u8>,
+    pub key_proof: Vec<u8>,
     pub kdf: KdfInfo,
     pub keys: KeyBundle,
     pub device: DeviceInfo,
@@ -150,12 +152,13 @@ pub struct LoginRequest {
     pub device: DeviceInfo,
 }
 
-/// `POST /v1/recover`: resets the login with a recovery-key proof.
+/// `POST /v1/recover`: resets the login after the master password was reset with the
+/// recovery key. `key_proof` shows the client could unwrap the vault key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecoverRequest {
     pub email: String,
     #[serde(with = "b64")]
-    pub recovery_auth_key: Vec<u8>,
+    pub key_proof: Vec<u8>,
     #[serde(with = "b64")]
     pub new_auth_key: Vec<u8>,
     pub kdf: KdfInfo,
@@ -184,8 +187,7 @@ pub struct KeysResponse {
 /// `PUT /v1/keys`: publish a changed key bundle.
 ///
 /// * Master password change: `current_auth_key`, `new_auth_key` and `new_kdf` are required.
-/// * Recovery-key rotation: `new_recovery_auth_key` is required.
-/// * Notes password change: only the bundle changes.
+/// * Notes password change or recovery-key rotation: only the bundle changes.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateKeysRequest {
     pub expected_version: i64,
@@ -196,8 +198,6 @@ pub struct UpdateKeysRequest {
     pub new_auth_key: Option<Vec<u8>>,
     #[serde(default)]
     pub new_kdf: Option<KdfInfo>,
-    #[serde(default, with = "b64_opt")]
-    pub new_recovery_auth_key: Option<Vec<u8>>,
     /// Sign out every other device (default after a master password change).
     #[serde(default)]
     pub revoke_other_sessions: bool,

@@ -18,6 +18,7 @@ pub mod import_export;
 mod model;
 mod recovery;
 mod store;
+pub mod sync;
 pub mod totp;
 mod vault;
 
