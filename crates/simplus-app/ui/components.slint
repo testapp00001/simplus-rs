@@ -1,0 +1,97 @@
+import { Button, Palette } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+
+/// A rounded panel used to group content.
+export component Card inherits Rectangle {
+    background: Theme.card;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Palette.border;
+}
+
+export component SectionTitle inherits Text {
+    font-size: Theme.font-heading;
+    font-weight: 600;
+    color: Palette.foreground;
+}
+
+export component Caption inherits Text {
+    font-size: Theme.font-small;
+    color: Theme.muted;
+    wrap: word-wrap;
+}
+
+export component ErrorText inherits Text {
+    color: Theme.danger;
+    wrap: word-wrap;
+}
+
+/// Five-segment strength bar with a label.
+export component StrengthMeter {
+    in property <int> score;
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> active: true;
+    property <color> tone: score <= 1 ? Theme.danger : score == 2 ? Theme.warning : Theme.success;
+
+    VerticalLayout {
+        spacing: 2px;
+        HorizontalLayout {
+            spacing: 4px;
+            height: 4px;
+            for i in 5: Rectangle {
+                border-radius: 2px;
+                background: root.active && i <= root.score ? root.tone : Palette.border;
+            }
+        }
+        if root.active: Caption {
+            text: root.detail == "" ? root.label : root.label + " · " + root.detail;
+        }
+    }
+}
+
+/// Read-only value with optional reveal and copy buttons.
+export component DetailField {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> secret;
+    in property <bool> copyable: true;
+    in property <bool> monospace;
+    property <bool> revealed;
+    callback copy();
+
+    VerticalLayout {
+        spacing: 2px;
+        Caption { text: root.label; }
+        HorizontalLayout {
+            spacing: Theme.gap;
+            Text {
+                text: root.secret && !root.revealed ? "••••••••••••" : root.value;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+                overflow: elide;
+                font-family: root.monospace || (root.secret && root.revealed) ? Theme.mono-font : "";
+                color: Palette.foreground;
+            }
+            if root.secret: Button {
+                text: root.revealed ? @tr("Hide") : @tr("Show");
+                clicked => { root.revealed = !root.revealed; }
+            }
+            if root.copyable: Button {
+                text: @tr("Copy");
+                clicked => { root.copy(); }
+            }
+        }
+    }
+}
+
+/// Clickable text link.
+export component Link inherits Text {
+    callback clicked();
+    color: Palette.accent-background;
+    font-size: Theme.font-small;
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}

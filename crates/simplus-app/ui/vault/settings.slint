@@ -1,0 +1,176 @@
+import { Button, LineEdit, CheckBox, ScrollView, Palette } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Card, SectionTitle, Caption, ErrorText } from "../components.slint";
+import { VaultState } from "state.slint";
+
+component PasswordChange inherits Card {
+    in property <string> title;
+    in property <string> current-label;
+    callback submit(string, string, string);
+    height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        SectionTitle { text: root.title; }
+        current := LineEdit {
+            input-type: InputType.password;
+            placeholder-text: root.current-label;
+        }
+        new := LineEdit {
+            input-type: InputType.password;
+            placeholder-text: @tr("New password");
+        }
+        confirm := LineEdit {
+            input-type: InputType.password;
+            placeholder-text: @tr("Confirm new password");
+        }
+        HorizontalLayout {
+            alignment: end;
+            Button {
+                text: @tr("Change");
+                enabled: !VaultState.busy && current.text != "" && new.text != "";
+                clicked => {
+                    root.submit(current.text, new.text, confirm.text);
+                    current.text = "";
+                    new.text = "";
+                    confirm.text = "";
+                }
+            }
+        }
+    }
+}
+
+export component VaultSettingsView inherits ScrollView {
+    property <bool> csv-acknowledged;
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+        alignment: start;
+
+        HorizontalLayout {
+            SectionTitle {
+                text: @tr("Vault settings");
+                font-size: Theme.font-title;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: @tr("Close");
+                clicked => { VaultState.close-settings(); }
+            }
+        }
+        if VaultState.error != "": ErrorText { text: VaultState.error; }
+
+        PasswordChange {
+            title: @tr("Change master password");
+            current-label: @tr("Current master password");
+            submit(c, n, k) => { VaultState.change-master-password(c, n, k); }
+        }
+        PasswordChange {
+            title: @tr("Change secure notes password");
+            current-label: @tr("Current secure notes password");
+            submit(c, n, k) => { VaultState.change-notes-password(c, n, k); }
+        }
+
+        Card {
+            height: recovery.preferred-height;
+            recovery := VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                SectionTitle { text: @tr("Recovery key"); }
+                Caption { text: @tr("Create a new recovery key if the old one was lost or seen by someone else. The old key stops working. Requires secure notes to be unlocked."); }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: @tr("Create new recovery key");
+                        enabled: VaultState.notes-unlocked && !VaultState.busy;
+                        clicked => { VaultState.rotate-recovery-key(); }
+                    }
+                }
+            }
+        }
+
+        Card {
+            height: import.preferred-height;
+            import := VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                SectionTitle { text: @tr("Import"); }
+                Caption { text: @tr("Bitwarden (JSON or CSV), Chrome/Edge, Firefox, KeePassXC or any CSV with title/username/password columns. Notes become secure notes, so unlock them first."); }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: @tr("Import from file…");
+                        enabled: !VaultState.busy;
+                        clicked => { VaultState.import-file(); }
+                    }
+                }
+            }
+        }
+
+        Card {
+            height: backup.preferred-height;
+            backup := VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                SectionTitle { text: @tr("Encrypted backup"); }
+                Caption { text: @tr("A .simplusvault file with all items and secure notes, protected by a password of your choice. Requires secure notes to be unlocked."); }
+                backup-password := LineEdit {
+                    input-type: InputType.password;
+                    placeholder-text: @tr("Backup password");
+                }
+                backup-confirm := LineEdit {
+                    input-type: InputType.password;
+                    placeholder-text: @tr("Confirm backup password (for export)");
+                }
+                HorizontalLayout {
+                    spacing: Theme.gap;
+                    alignment: end;
+                    Button {
+                        text: @tr("Restore backup…");
+                        enabled: !VaultState.busy && backup-password.text != "";
+                        clicked => { VaultState.restore-backup(backup-password.text); }
+                    }
+                    Button {
+                        text: @tr("Export backup…");
+                        enabled: !VaultState.busy && VaultState.notes-unlocked && backup-password.text != "";
+                        clicked => {
+                            VaultState.export-backup(backup-password.text, backup-confirm.text);
+                            backup-password.text = "";
+                            backup-confirm.text = "";
+                        }
+                    }
+                }
+            }
+        }
+
+        Card {
+            height: csv.preferred-height;
+            csv := VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                SectionTitle { text: @tr("Export as CSV (unencrypted)"); }
+                Caption {
+                    text: @tr("Anyone who gets this file can read every password. Delete it as soon as you have imported it elsewhere.");
+                    color: Theme.danger;
+                }
+                CheckBox {
+                    text: @tr("I understand the file is not encrypted");
+                    checked <=> root.csv-acknowledged;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: @tr("Export CSV…");
+                        enabled: root.csv-acknowledged;
+                        clicked => {
+                            root.csv-acknowledged = false;
+                            VaultState.export-csv();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

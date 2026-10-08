@@ -1,0 +1,520 @@
+import { Button, LineEdit, TextEdit, CheckBox, ListView, ScrollView, ProgressIndicator, Palette } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Card, SectionTitle, Caption, ErrorText, StrengthMeter, DetailField } from "../components.slint";
+import { VaultState, VaultPanel, RecordRow, RecordDetail, NoteRow, FieldRow, Strength } from "state.slint";
+import { GeneratorPopup } from "generator.slint";
+import { VaultSettingsView } from "settings.slint";
+
+component RecordItem inherits Rectangle {
+    in property <RecordRow> item;
+    in property <bool> selected;
+    callback clicked();
+
+    height: 52px;
+    border-radius: 6px;
+    background: root.selected ? Palette.selection-background : touch.has-hover ? Palette.alternate-background : transparent;
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: Theme.gap;
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text {
+                text: root.item.title;
+                font-weight: 600;
+                overflow: elide;
+                color: root.selected ? Palette.selection-foreground : Palette.foreground;
+            }
+            Text {
+                text: root.item.subtitle;
+                font-size: Theme.font-small;
+                overflow: elide;
+                color: root.selected ? Palette.selection-foreground : Theme.muted;
+            }
+        }
+        if root.item.has-totp: Text {
+            text: "2FA";
+            font-size: 10px;
+            vertical-alignment: center;
+            color: root.selected ? Palette.selection-foreground : Theme.muted;
+        }
+        if root.item.favorite: Text {
+            text: "★";
+            vertical-alignment: center;
+            color: Theme.star;
+        }
+    }
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+component RecordList inherits VerticalLayout {
+    spacing: Theme.gap;
+    padding: 12px;
+
+    HorizontalLayout {
+        spacing: Theme.gap;
+        LineEdit {
+            placeholder-text: @tr("Search");
+            edited(text) => { VaultState.search(text); }
+        }
+        Button {
+            text: "★";
+            checkable: true;
+            checked: VaultState.favorites-only;
+            clicked => { VaultState.set-favorites-only(self.checked); }
+        }
+    }
+    Button {
+        text: @tr("New item");
+        primary: true;
+        clicked => { VaultState.new-record(); }
+    }
+    if VaultState.records.length == 0: Caption {
+        text: VaultState.record-total == 0 ? @tr("Your vault is empty. Add an item or import from another password manager (Vault settings).") : @tr("No matching items.");
+        horizontal-alignment: center;
+    }
+    ListView {
+        vertical-stretch: 1;
+        for row in VaultState.records: RecordItem {
+            item: row;
+            selected: row.id == VaultState.selected-id;
+            clicked => { VaultState.select-record(row.id); }
+        }
+    }
+    Caption {
+        text: VaultState.record-total == 1 ? @tr("1 item") : @tr("{} items", VaultState.record-total);
+    }
+}
+
+component NoteEditor inherits VerticalLayout {
+    in property <NoteRow> note;
+    spacing: 6px;
+    title := LineEdit {
+        text: root.note.title;
+        placeholder-text: @tr("Title");
+    }
+    body := TextEdit {
+        text: root.note.body;
+        min-height: 120px;
+        wrap: word-wrap;
+    }
+    HorizontalLayout {
+        spacing: Theme.gap;
+        alignment: end;
+        Button {
+            text: @tr("Cancel");
+            clicked => { VaultState.editing-note-id = ""; }
+        }
+        Button {
+            text: @tr("Save note");
+            primary: true;
+            clicked => {
+                VaultState.save-note({ id: root.note.id, title: title.text, body: body.text, updated: "" });
+            }
+        }
+    }
+}
+
+component NoteCard inherits Card {
+    in property <NoteRow> note;
+    property <bool> confirm-delete;
+    height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        padding: 12px;
+        spacing: 6px;
+        if VaultState.editing-note-id != root.note.id: VerticalLayout {
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: Theme.gap;
+                Text {
+                    text: root.note.title;
+                    font-weight: 600;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    color: Palette.foreground;
+                }
+                Button {
+                    text: @tr("Copy");
+                    clicked => { VaultState.copy(root.note.body, true); }
+                }
+                Button {
+                    text: @tr("Edit");
+                    clicked => { VaultState.editing-note-id = root.note.id; }
+                }
+                if !root.confirm-delete: Button {
+                    text: @tr("Delete");
+                    clicked => { root.confirm-delete = true; }
+                }
+                if root.confirm-delete: Button {
+                    text: @tr("Confirm delete");
+                    clicked => {
+                        root.confirm-delete = false;
+                        VaultState.delete-note(root.note.id);
+                    }
+                }
+            }
+            Text {
+                text: root.note.body;
+                wrap: word-wrap;
+                font-family: Theme.mono-font;
+                color: Palette.foreground;
+            }
+            Caption { text: @tr("Updated {}", root.note.updated); }
+        }
+        if VaultState.editing-note-id == root.note.id: NoteEditor { note: root.note; }
+    }
+}
+
+component NotesSection inherits VerticalLayout {
+    spacing: Theme.gap;
+    SectionTitle {
+        text: VaultState.note-count == 0 ? @tr("Secure notes") : @tr("Secure notes ({})", VaultState.note-count);
+    }
+    if !VaultState.notes-unlocked: Card {
+        height: locked-layout.preferred-height;
+        locked-layout := VerticalLayout {
+            padding: 12px;
+            spacing: 6px;
+            Caption { text: @tr("Secure notes are protected by your second password."); }
+            HorizontalLayout {
+                spacing: Theme.gap;
+                notes-password := LineEdit {
+                    input-type: InputType.password;
+                    placeholder-text: @tr("Secure notes password");
+                    enabled: !VaultState.busy;
+                    accepted => { VaultState.unlock-notes(self.text); }
+                }
+                Button {
+                    text: VaultState.busy ? @tr("Unlocking…") : @tr("Unlock notes");
+                    enabled: !VaultState.busy;
+                    clicked => { VaultState.unlock-notes(notes-password.text); }
+                }
+            }
+            if VaultState.error != "": ErrorText { text: VaultState.error; }
+        }
+    }
+    if VaultState.notes-unlocked: VerticalLayout {
+        spacing: Theme.gap;
+        for note in VaultState.notes: NoteCard { note: note; }
+        if VaultState.editing-note-id == "new": Card {
+            height: new-note-layout.preferred-height;
+            new-note-layout := VerticalLayout {
+                padding: 12px;
+                NoteEditor {
+                    note: { id: "", title: "", body: "", updated: "" };
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: Theme.gap;
+            alignment: start;
+            Button {
+                text: @tr("Add note");
+                enabled: VaultState.editing-note-id == "";
+                clicked => { VaultState.editing-note-id = "new"; }
+            }
+            Button {
+                text: @tr("Lock notes");
+                clicked => { VaultState.lock-notes(); }
+            }
+        }
+    }
+}
+
+component RecordDetailView inherits ScrollView {
+    property <bool> confirm-delete;
+    property <RecordDetail> d: VaultState.detail;
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+        alignment: start;
+
+        HorizontalLayout {
+            spacing: Theme.gap;
+            Text {
+                text: root.d.title;
+                font-size: Theme.font-title;
+                font-weight: 600;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+                overflow: elide;
+                color: Palette.foreground;
+            }
+            Button {
+                text: root.d.favorite ? "★" : "☆";
+                clicked => { VaultState.toggle-favorite(root.d.id); }
+            }
+            Button {
+                text: @tr("Edit");
+                clicked => { VaultState.edit-record(); }
+            }
+            if !root.confirm-delete: Button {
+                text: @tr("Delete");
+                clicked => { root.confirm-delete = true; }
+            }
+            if root.confirm-delete: Button {
+                text: @tr("Confirm delete");
+                clicked => {
+                    root.confirm-delete = false;
+                    VaultState.delete-record(root.d.id);
+                }
+            }
+        }
+
+        if root.d.username != "": DetailField {
+            label: @tr("Username");
+            value: root.d.username;
+            copy => { VaultState.copy(root.d.username, false); }
+        }
+        if root.d.password != "": DetailField {
+            label: @tr("Password");
+            value: root.d.password;
+            secret: true;
+            copy => { VaultState.copy(root.d.password, true); }
+        }
+        if root.d.totp != "": VerticalLayout {
+            spacing: 2px;
+            Caption { text: @tr("One-time code"); }
+            if VaultState.totp-error != "": ErrorText { text: VaultState.totp-error; }
+            if VaultState.totp-error == "": HorizontalLayout {
+                spacing: Theme.gap;
+                Text {
+                    text: VaultState.totp-code;
+                    font-size: 22px;
+                    font-family: Theme.mono-font;
+                    letter-spacing: 2px;
+                    vertical-alignment: center;
+                    color: Palette.foreground;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    width: 80px;
+                    ProgressIndicator { progress: VaultState.totp-remaining / max(1, VaultState.totp-period); }
+                    Caption { text: @tr("{}s", VaultState.totp-remaining); }
+                }
+                Rectangle { horizontal-stretch: 1; }
+                Button {
+                    text: @tr("Copy");
+                    clicked => { VaultState.copy-totp(); }
+                }
+            }
+        }
+        for url in root.d.url-list: DetailField {
+            label: @tr("Website");
+            value: url;
+            copy => { VaultState.copy(url, false); }
+        }
+        if root.d.folder != "" || root.d.tags != "": HorizontalLayout {
+            spacing: 24px;
+            alignment: start;
+            if root.d.folder != "": DetailField {
+                label: @tr("Folder");
+                value: root.d.folder;
+                copyable: false;
+            }
+            if root.d.tags != "": DetailField {
+                label: @tr("Tags");
+                value: root.d.tags;
+                copyable: false;
+            }
+        }
+        for field in root.d.fields: DetailField {
+            label: field.name;
+            value: field.value;
+            secret: field.hidden;
+            copy => { VaultState.copy(field.value, field.hidden); }
+        }
+
+        NotesSection { }
+
+        if root.d.history.length > 0: VerticalLayout {
+            spacing: 6px;
+            SectionTitle { text: @tr("Password history"); }
+            for entry in root.d.history: DetailField {
+                label: entry.changed;
+                value: entry.password;
+                secret: true;
+                copy => { VaultState.copy(entry.password, true); }
+            }
+        }
+        Caption { text: @tr("Created {} · Updated {}", root.d.created, root.d.updated); }
+    }
+}
+
+component RecordEditor inherits ScrollView {
+    in property <RecordDetail> source;
+    property <Strength> strength: VaultState.strength(password.text);
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 10px;
+        alignment: start;
+
+        SectionTitle {
+            text: root.source.id == "" ? @tr("New item") : @tr("Edit item");
+            font-size: Theme.font-title;
+        }
+        Caption { text: @tr("Title"); }
+        title := LineEdit {
+            text: root.source.title;
+            init => { self.focus(); }
+            edited => { VaultState.activity(); }
+        }
+        Caption { text: @tr("Username"); }
+        username := LineEdit {
+            text: root.source.username;
+            edited => { VaultState.activity(); }
+        }
+        Caption { text: @tr("Password"); }
+        HorizontalLayout {
+            spacing: Theme.gap;
+            password := LineEdit {
+                text: root.source.password;
+                input-type: InputType.password;
+                font-family: Theme.mono-font;
+                edited => { VaultState.activity(); }
+            }
+            Button {
+                text: @tr("Generate");
+                clicked => { generator.show(); }
+            }
+        }
+        StrengthMeter {
+            active: password.text != "";
+            score: root.strength.score;
+            label: root.strength.label;
+            detail: root.strength.warning != "" ? root.strength.warning : root.strength.crack-time;
+        }
+        Caption { text: @tr("Websites (one per line)"); }
+        urls := TextEdit {
+            text: root.source.urls;
+            min-height: 64px;
+        }
+        HorizontalLayout {
+            spacing: Theme.gap;
+            VerticalLayout {
+                spacing: 4px;
+                Caption { text: @tr("Folder"); }
+                folder := LineEdit { text: root.source.folder; }
+            }
+            VerticalLayout {
+                spacing: 4px;
+                Caption { text: @tr("Tags (comma-separated)"); }
+                tags := LineEdit { text: root.source.tags; }
+            }
+        }
+        Caption { text: @tr("Two-factor (TOTP): otpauth:// link or secret key"); }
+        totp := LineEdit {
+            text: root.source.totp;
+            font-family: Theme.mono-font;
+        }
+        favorite := CheckBox {
+            text: @tr("Favorite");
+            checked: root.source.favorite;
+        }
+
+        SectionTitle { text: @tr("Custom fields"); }
+        for field[i] in VaultState.edit-fields: HorizontalLayout {
+            spacing: Theme.gap;
+            LineEdit {
+                text: field.name;
+                placeholder-text: @tr("Name");
+                edited(t) => { VaultState.update-field(i, { name: t, value: field.value, hidden: field.hidden }); }
+            }
+            LineEdit {
+                text: field.value;
+                placeholder-text: @tr("Value");
+                input-type: field.hidden ? InputType.password : InputType.text;
+                edited(t) => { VaultState.update-field(i, { name: field.name, value: t, hidden: field.hidden }); }
+            }
+            CheckBox {
+                text: @tr("Hidden");
+                checked: field.hidden;
+                toggled => { VaultState.update-field(i, { name: field.name, value: field.value, hidden: self.checked }); }
+            }
+            Button {
+                text: "✕";
+                clicked => { VaultState.remove-field(i); }
+            }
+        }
+        HorizontalLayout {
+            alignment: start;
+            Button {
+                text: @tr("Add field");
+                clicked => { VaultState.add-field(); }
+            }
+        }
+
+        if VaultState.error != "": ErrorText { text: VaultState.error; }
+        HorizontalLayout {
+            spacing: Theme.gap;
+            alignment: end;
+            Button {
+                text: @tr("Cancel");
+                clicked => { VaultState.cancel-edit(); }
+            }
+            Button {
+                text: @tr("Save");
+                primary: true;
+                clicked => {
+                    VaultState.save-record({
+                        id: root.source.id,
+                        title: title.text,
+                        username: username.text,
+                        password: password.text,
+                        urls: urls.text,
+                        url-list: [],
+                        folder: folder.text,
+                        tags: tags.text,
+                        favorite: favorite.checked,
+                        totp: totp.text,
+                        fields: [],
+                        history: [],
+                        created: "",
+                        updated: "",
+                    });
+                }
+            }
+        }
+    }
+
+    generator := GeneratorPopup {
+        x: 20px;
+        y: 120px;
+        use(value) => { password.text = value; }
+    }
+}
+
+export component UnlockedView inherits Rectangle {
+    HorizontalLayout {
+        Rectangle {
+            width: 320px;
+            background: Palette.alternate-background;
+            RecordList { }
+        }
+        Rectangle {
+            width: 1px;
+            background: Palette.border;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+            if VaultState.panel == VaultPanel.settings: VaultSettingsView { }
+            if VaultState.panel == VaultPanel.edit: RecordEditor { source: VaultState.detail; }
+            if VaultState.panel == VaultPanel.detail && VaultState.selected-id != "": RecordDetailView { }
+            if VaultState.panel == VaultPanel.detail && VaultState.selected-id == "": VerticalLayout {
+                alignment: center;
+                Caption {
+                    text: @tr("Select an item to see its details.");
+                    horizontal-alignment: center;
+                }
+            }
+        }
+    }
+}

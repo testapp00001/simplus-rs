@@ -1,0 +1,64 @@
+import { Button, Palette } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Caption } from "../components.slint";
+import { VaultState, VaultScreen, VaultPanel } from "state.slint";
+import { CreateVaultView, RecoveryKitView, UnlockView, RecoverView } from "setup.slint";
+import { UnlockedView } from "browser.slint";
+
+export { VaultState }
+
+/// The password manager page: toolbar, current screen and status line.
+export component VaultPage inherits Rectangle {
+    VerticalLayout {
+        Rectangle {
+            height: 52px;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: Theme.gap;
+                Text {
+                    text: @tr("Password Manager");
+                    font-size: Theme.font-title;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    color: Palette.foreground;
+                }
+                if VaultState.screen == VaultScreen.unlocked: Button {
+                    text: @tr("Vault settings");
+                    clicked => { VaultState.open-settings(); }
+                }
+                if VaultState.screen == VaultScreen.unlocked: Button {
+                    text: @tr("Lock");
+                    primary: true;
+                    clicked => { VaultState.lock(); }
+                }
+            }
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Palette.border;
+            }
+        }
+        Rectangle {
+            vertical-stretch: 1;
+            if VaultState.screen == VaultScreen.create: CreateVaultView { }
+            if VaultState.screen == VaultScreen.recovery-kit: RecoveryKitView { }
+            if VaultState.screen == VaultScreen.locked: UnlockView { }
+            if VaultState.screen == VaultScreen.recover: RecoverView { }
+            if VaultState.screen == VaultScreen.unlocked: UnlockedView { }
+        }
+        if VaultState.status != "": Rectangle {
+            height: 30px;
+            background: VaultState.status-is-error ? Theme.danger : Palette.accent-background;
+            Text {
+                text: VaultState.status;
+                color: white;
+                vertical-alignment: center;
+                horizontal-alignment: center;
+            }
+        }
+    }
+}

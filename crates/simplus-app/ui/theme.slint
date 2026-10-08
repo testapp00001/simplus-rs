@@ -1,0 +1,19 @@
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    out property <length> radius: 8px;
+    out property <length> gap: 8px;
+    out property <length> gap-large: 16px;
+    out property <length> font-small: 12px;
+    out property <length> font-title: 20px;
+    out property <length> font-heading: 15px;
+    out property <length> sidebar-width: 200px;
+    out property <color> danger: #c42b1c;
+    out property <color> warning: #9d5d00;
+    out property <color> success: #0f7b0f;
+    out property <color> star: #d89b00;
+    out property <brush> muted: Palette.foreground.with-alpha(0.65);
+    out property <brush> card: Palette.alternate-background;
+    /// Set from Rust per platform (Consolas / Menlo / DejaVu Sans Mono).
+    in-out property <string> mono-font: "monospace";
+}
