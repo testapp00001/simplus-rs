@@ -1,3 +1,4 @@
+use std::io::IsTerminal as _;
 use std::path::Path;
 
 use tracing_appender::non_blocking::WorkerGuard;
@@ -13,7 +14,8 @@ pub const LOG_ENV: &str = "SIMPLUS_LOG";
 /// buffered file output is flushed on exit.
 pub fn init(log_dir: Option<&Path>) -> anyhow::Result<Option<WorkerGuard>> {
     let filter = EnvFilter::try_from_env(LOG_ENV).unwrap_or_else(|_| EnvFilter::new("info"));
-    let stderr = fmt::layer().with_writer(std::io::stderr);
+    // Colours only on an interactive terminal (not in Docker logs or log files).
+    let stderr = fmt::layer().with_ansi(std::io::stderr().is_terminal()).with_writer(std::io::stderr);
 
     let (file_layer, guard) = match log_dir {
         Some(dir) => {

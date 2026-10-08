@@ -16,6 +16,7 @@ simplus-core = { path = "crates/simplus-core" }
 simplus-crypto = { path = "crates/simplus-crypto" }
 simplus-vault-core = { path = "crates/simplus-vault-core" }
 simplus-vault-proto = { path = "crates/simplus-vault-proto" }
+simplus-vault-sync = { path = "crates/simplus-vault-sync" }
 simplus-ui-kit = { path = "crates/simplus-ui-kit" }
 
 # Crypto

@@ -47,6 +47,16 @@ pub struct Vault {
     pub(crate) notes_key: Option<SecretKey>,
 }
 
+impl std::fmt::Debug for Vault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Vault")
+            .field("id", &self.id)
+            .field("unlocked", &self.is_unlocked())
+            .field("notes_unlocked", &self.notes_unlocked())
+            .finish_non_exhaustive()
+    }
+}
+
 /// Maps a crypto failure on stored data to "corrupted"; other crypto errors pass through.
 pub(crate) fn data_error(e: CryptoError) -> VaultError {
     match e {

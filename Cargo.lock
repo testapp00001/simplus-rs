@@ -5089,6 +5089,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "simplus-vault-sync"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "simplus-crypto",
+ "simplus-sync-server",
+ "simplus-vault-core",
+ "simplus-vault-proto",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "ureq",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "single-instance"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
