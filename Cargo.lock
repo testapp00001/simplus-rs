@@ -4698,6 +4698,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "simplus-vault-proto"
+version = "0.1.0"
+dependencies = [
+ "data-encoding",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "single-instance"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

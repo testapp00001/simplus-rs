@@ -15,6 +15,7 @@ publish = false
 simplus-core = { path = "crates/simplus-core" }
 simplus-crypto = { path = "crates/simplus-crypto" }
 simplus-vault-core = { path = "crates/simplus-vault-core" }
+simplus-vault-proto = { path = "crates/simplus-vault-proto" }
 simplus-ui-kit = { path = "crates/simplus-ui-kit" }
 
 # Crypto
