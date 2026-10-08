@@ -89,6 +89,56 @@ export component CreateVaultView inherits CenteredCard {
             VaultState.create-vault(master.value, master.confirm, notes.value, notes.confirm);
         }
     }
+    Link {
+        text: @tr("Already use Simplus sync on another device? Sign in instead");
+        clicked => { VaultState.show-download(); }
+    }
+}
+
+/// New device: create the local vault from an existing sync account.
+export component DownloadVaultView inherits CenteredCard {
+    card-width: 520px;
+    SectionTitle {
+        text: @tr("Sign in to your synced vault");
+        font-size: Theme.font-title;
+    }
+    Caption {
+        text: @tr("Your vault is downloaded encrypted and decrypted on this device with your master password. The server never sees it.");
+    }
+    url := LineEdit {
+        placeholder-text: @tr("Server address, e.g. https://sync.example.com");
+        enabled: !VaultState.busy;
+    }
+    email := LineEdit {
+        placeholder-text: @tr("Email");
+        enabled: !VaultState.busy;
+    }
+    device := LineEdit {
+        text: VaultState.default-device-name;
+        placeholder-text: @tr("Name of this device");
+        enabled: !VaultState.busy;
+    }
+    password := PasswordInput {
+        placeholder-text: @tr("Master password");
+        enabled: !VaultState.busy;
+        accepted => { VaultState.download-vault(url.text, email.text, device.text, self.text); }
+    }
+    if VaultState.error != "": ErrorText { text: VaultState.error; }
+    if VaultState.busy: BusyRow { text: @tr("Signing in and downloading…"); }
+    HorizontalLayout {
+        spacing: Theme.gap;
+        Button {
+            text: @tr("Back");
+            enabled: !VaultState.busy;
+            clicked => { VaultState.cancel-download(); }
+        }
+        Button {
+            text: @tr("Sign in");
+            primary: true;
+            enabled: !VaultState.busy && url.text != "" && email.text != "" && password.text != "";
+            clicked => { VaultState.download-vault(url.text, email.text, device.text, password.text); }
+        }
+    }
 }
 
 export component RecoveryKitView inherits CenteredCard {

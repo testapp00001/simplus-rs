@@ -266,7 +266,10 @@ pub fn recover_account(vault: &impl VaultAccess, new_master_password: &str) -> R
         Ok((settings, request))
     })?;
     let session = connect(&settings.server_url)?.recover(&request)?;
-    vault.with_vault(|v| Ok(v.enable_sync(&settings, &session.token, session.keys_version)?))
+    vault.with_vault(|v| {
+        v.enable_sync(&settings, &session.token, session.keys_version)?;
+        Ok(v.set_recovery_pending(false)?)
+    })
 }
 
 /// What a sync did.

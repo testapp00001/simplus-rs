@@ -1,4 +1,4 @@
-export enum VaultScreen { loading, create, recovery-kit, locked, recover, unlocked }
+export enum VaultScreen { loading, create, recovery-kit, locked, recover, unlocked, download }
 
 /// What the right-hand pane of the unlocked vault shows.
 export enum VaultPanel { detail, edit, settings }
@@ -39,6 +39,13 @@ export struct RecordDetail {
     history: [HistoryRow],
     created: string,
     updated: string,
+}
+
+export struct DeviceRow {
+    id: string,
+    name: string,
+    last-seen: string,
+    current: bool,
 }
 
 export struct NoteRow {
@@ -106,6 +113,20 @@ export global VaultState {
     /// Id of the note being edited, "new" for a new note, "" for none.
     in-out property <string> editing-note-id;
 
+    // Sync
+    in-out property <bool> sync-enabled;
+    in-out property <bool> sync-busy;
+    /// The server no longer accepts this device's session (e.g. password changed elsewhere).
+    in-out property <bool> sync-signed-out;
+    /// Passwords were reset with the recovery key but the server login is not updated yet.
+    in-out property <bool> sync-recovery-pending;
+    in-out property <string> sync-server;
+    in-out property <string> sync-email;
+    in-out property <string> sync-status;
+    in-out property <bool> sync-status-is-error;
+    in-out property <string> default-device-name;
+    in-out property <[DeviceRow]> sync-devices;
+
     // Setup and unlock
     callback create-vault(string, string, string, string);
     callback recovery-kit-done();
@@ -151,6 +172,19 @@ export global VaultState {
     callback restore-backup(string);
     callback export-backup(string, string);
     callback export-csv();
+
+    // Sync: url, email, device name, master password, invite code, create (vs sign in)
+    callback sync-setup(string, string, string, string, string, bool);
+    callback sync-now();
+    callback sync-sign-in-again(string);
+    callback sync-finish-recovery(string);
+    callback sync-sign-out();
+    callback sync-load-devices();
+    callback sync-revoke-device(string);
+    callback show-download();
+    callback cancel-download();
+    // url, email, device name, master password
+    callback download-vault(string, string, string, string);
 
     /// Any user interaction; resets the auto-lock timer.
     callback activity();

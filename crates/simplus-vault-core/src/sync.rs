@@ -40,6 +40,7 @@ const META_TOKEN: &str = "sync.token";
 const META_CURSOR: &str = "sync.cursor";
 const META_KEYS_VERSION: &str = "sync.keys_version";
 const META_LAST_SYNC: &str = "sync.last_sync";
+const META_RECOVERY_PENDING: &str = "sync.recovery_pending";
 
 /// Where and as whom this vault syncs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -321,6 +322,20 @@ impl Vault {
 
     pub fn set_last_sync(&mut self, at: DateTime<Utc>) -> Result<()> {
         store::set_meta(&self.conn, META_LAST_SYNC, &at.timestamp_millis().to_le_bytes())
+    }
+
+    /// Passwords were reset with the recovery key while the server could not be told; the
+    /// server login still has to be reset (see `simplus_vault_sync::recover_account`).
+    pub fn recovery_pending(&self) -> Result<bool> {
+        Ok(store::get_meta(&self.conn, META_RECOVERY_PENDING)?.is_some())
+    }
+
+    pub fn set_recovery_pending(&mut self, pending: bool) -> Result<()> {
+        if pending {
+            store::set_meta(&self.conn, META_RECOVERY_PENDING, &[1])
+        } else {
+            store::delete_meta(&self.conn, META_RECOVERY_PENDING)
+        }
     }
 
     // -------------------------------------------------------------------------------------

@@ -2,7 +2,7 @@ import { Button, Palette } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { Caption } from "../components.slint";
 import { VaultState, VaultScreen, VaultPanel } from "state.slint";
-import { CreateVaultView, RecoveryKitView, UnlockView, RecoverView } from "setup.slint";
+import { CreateVaultView, RecoveryKitView, UnlockView, RecoverView, DownloadVaultView } from "setup.slint";
 import { UnlockedView } from "browser.slint";
 
 export { VaultState }
@@ -25,6 +25,12 @@ export component VaultPage inherits Rectangle {
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     color: Palette.foreground;
+                }
+                if VaultState.screen == VaultScreen.unlocked && VaultState.sync-enabled: Text {
+                    text: VaultState.sync-busy ? @tr("Syncing…") : VaultState.sync-status;
+                    color: VaultState.sync-status-is-error ? Theme.danger : Theme.muted;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
                 }
                 if VaultState.screen == VaultScreen.unlocked: Button {
                     text: @tr("Vault settings");
@@ -49,6 +55,7 @@ export component VaultPage inherits Rectangle {
             if VaultState.screen == VaultScreen.locked: UnlockView { }
             if VaultState.screen == VaultScreen.recover: RecoverView { }
             if VaultState.screen == VaultScreen.unlocked: UnlockedView { }
+            if VaultState.screen == VaultScreen.download: DownloadVaultView { }
         }
         if VaultState.status != "": Rectangle {
             height: 30px;

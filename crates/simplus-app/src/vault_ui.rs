@@ -15,14 +15,15 @@ use simplus_vault_core::generator::{self, PassphraseOptions, PasswordOptions};
 use simplus_vault_core::import_export::{self, ImportSummary};
 use simplus_vault_core::totp::Totp;
 use simplus_vault_core::{CustomField, KdfParams, Record, RecoveryKey, SecureNote, Vault, VaultError};
+use simplus_vault_sync::{self as vsync, Account, LoginChange, SyncError, SyncReport, VaultAccess as _};
 use slint::{ComponentHandle as _, Model as _, ModelRc, SharedString, Timer, TimerMode, VecModel};
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::clipboard::SecretClipboard;
 use crate::{
-    AppSettings, FieldRow, GeneratorOptions, HistoryRow, MainWindow, NoteRow, RecordDetail, RecordRow,
-    Strength, VaultPanel, VaultScreen, VaultState,
+    AppSettings, DeviceRow, FieldRow, GeneratorOptions, HistoryRow, MainWindow, NoteRow, RecordDetail,
+    RecordRow, Strength, VaultPanel, VaultScreen, VaultState,
 };
 
 /// Minimum length enforced for new vault passwords.
@@ -30,6 +31,10 @@ const MIN_PASSWORD_LEN: usize = 8;
 /// Secure notes re-lock after this much inactivity (or sooner if the vault auto-lock is shorter).
 const NOTES_IDLE_LIMIT: Duration = Duration::from_secs(120);
 const STATUS_DURATION: Duration = Duration::from_secs(4);
+/// Delay between a local change and the automatic sync that uploads it.
+const SYNC_DEBOUNCE: Duration = Duration::from_secs(3);
+/// Background sync interval while the vault is unlocked.
+const SYNC_INTERVAL: Duration = Duration::from_secs(300);
 
 thread_local! {
     static CONTROLLER: RefCell<Option<Rc<VaultController>>> = const { RefCell::new(None) };
@@ -61,6 +66,7 @@ pub struct VaultController {
     fields: Rc<VecModel<FieldRow>>,
     clipboard: SecretClipboard,
     status_timer: Timer,
+    sync_timer: Timer,
     timers: RefCell<Vec<Timer>>,
 }
 
@@ -90,12 +96,14 @@ impl VaultController {
             fields: Rc::new(VecModel::default()),
             clipboard: SecretClipboard::default(),
             status_timer: Timer::default(),
+            sync_timer: Timer::default(),
             timers: RefCell::default(),
         });
         let state = ui.global::<VaultState<'_>>();
         state.set_records(ModelRc::from(controller.rows.clone()));
         state.set_notes(ModelRc::from(controller.notes.clone()));
         state.set_edit_fields(ModelRc::from(controller.fields.clone()));
+        state.set_default_device_name(default_device_name().into());
 
         controller.connect(&state);
         controller.start_timers();
@@ -198,6 +206,30 @@ impl VaultController {
         state.on_restore_backup(handler!(self, |c, pw| c.restore_backup(secret(&pw))));
         state.on_export_backup(handler!(self, |c, pw, confirm| c.export_backup(secret(&pw), secret(&confirm))));
         state.on_export_csv(handler!(self, |c| c.export_csv()));
+
+        state.on_sync_setup(handler!(self, |c, url, email, device, password, invite, create| c.sync_setup(
+            url.to_string(),
+            email.to_string(),
+            device.to_string(),
+            secret(&password),
+            invite.to_string(),
+            create
+        )));
+        state.on_sync_now(handler!(self, |c| c.sync_now()));
+        state.on_sync_sign_in_again(handler!(self, |c, password| c.sync_sign_in_again(secret(&password))));
+        state
+            .on_sync_finish_recovery(handler!(self, |c, password| c.sync_finish_recovery(secret(&password))));
+        state.on_sync_sign_out(handler!(self, |c| c.sync_sign_out()));
+        state.on_sync_load_devices(handler!(self, |c| c.sync_load_devices()));
+        state.on_sync_revoke_device(handler!(self, |c, id| c.sync_revoke_device(&id)));
+        state.on_show_download(handler!(self, |c| c.show_screen(VaultScreen::Download)));
+        state.on_cancel_download(handler!(self, |c| c.show_screen(VaultScreen::Create)));
+        state.on_download_vault(handler!(self, |c, url, email, device, password| c.download_vault(
+            url.to_string(),
+            email.to_string(),
+            device.to_string(),
+            secret(&password)
+        )));
     }
 
     fn start_timers(self: &Rc<Self>) {
@@ -209,7 +241,11 @@ impl VaultController {
         let c = self.clone();
         lock_timer.start(TimerMode::Repeated, Duration::from_secs(3), move || c.check_auto_lock());
 
-        self.timers.borrow_mut().extend([totp_timer, lock_timer]);
+        let sync_timer = Timer::default();
+        let c = self.clone();
+        sync_timer.start(TimerMode::Repeated, SYNC_INTERVAL, move || c.sync_now());
+
+        self.timers.borrow_mut().extend([totp_timer, lock_timer, sync_timer]);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -417,6 +453,8 @@ impl VaultController {
                         s.set_panel(VaultPanel::Detail);
                     });
                     c.refresh_records();
+                    c.refresh_sync_state();
+                    c.sync_now();
                 }
                 Err(e) => c.error(&describe(&e)),
             },
@@ -441,25 +479,44 @@ impl VaultController {
             return;
         }
         let path = self.path.clone();
-        self.background(
+        self.sync_job(
+            true,
             move |slot| {
                 let vault = Vault::recover(&path, &recovery_key, &master, &notes)?;
-                *slot = Some(vault);
-                Ok::<_, VaultError>(())
+                let synced = vault.is_sync_enabled()?;
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(vault);
+                if !synced {
+                    return Ok(None);
+                }
+                // Reset the server login too; if the server is unreachable, remember to do it later.
+                match vsync::recover_account(slot, &master) {
+                    Ok(()) => Ok(None),
+                    Err(e) => {
+                        slot.with_vault(|v| Ok(v.set_recovery_pending(true)?))?;
+                        Ok(Some(e))
+                    }
+                }
             },
             |c, result| match result {
-                Ok(()) => {
+                Ok(server_error) => {
                     c.with_state(|s| {
                         s.set_screen(VaultScreen::Unlocked);
                         s.set_panel(VaultPanel::Detail);
                     });
                     c.refresh_records();
-                    c.status(
-                        "Passwords reset. Consider creating a new recovery key in Vault settings.",
-                        false,
-                    );
+                    c.refresh_sync_state();
+                    match server_error {
+                        None => {
+                            c.status("Passwords reset. Consider creating a new recovery key in Vault settings.", false);
+                            c.sync_now();
+                        }
+                        Some(e) => c.status(
+                            &format!("Passwords reset here, but the sync server could not be updated ({e}). Finish it in Vault settings."),
+                            true,
+                        ),
+                    }
                 }
-                Err(e) => c.error(&describe(&e)),
+                Err(e) => c.error(&sync_message(&e)),
             },
         );
     }
@@ -628,6 +685,7 @@ impl VaultController {
         self.refresh_records();
         self.select_record(&record.id.to_string());
         self.status("Saved.", false);
+        self.schedule_sync();
     }
 
     fn delete_record(&self, id: &str) {
@@ -640,6 +698,7 @@ impl VaultController {
             });
             self.refresh_records();
             self.status("Item deleted.", false);
+            self.schedule_sync();
         }
     }
 
@@ -649,6 +708,7 @@ impl VaultController {
         if self.with_vault(|v| v.save_record(&mut record)).is_some() {
             self.refresh_records();
             self.select_record(id);
+            self.schedule_sync();
         }
     }
 
@@ -776,6 +836,7 @@ impl VaultController {
             self.with_state(|s| s.set_editing_note_id(SharedString::new()));
             self.load_notes();
             self.status("Note saved.", false);
+            self.schedule_sync();
         }
     }
 
@@ -784,6 +845,7 @@ impl VaultController {
         if self.with_vault(|v| v.delete_note(uuid)).is_some() {
             self.load_notes();
             self.status("Note deleted.", false);
+            self.schedule_sync();
         }
     }
 
@@ -796,28 +858,47 @@ impl VaultController {
         if !self.validate_new_password(&new, &confirm, what) {
             return;
         }
-        self.background(
-            move |slot| match slot.as_mut() {
-                Some(vault) if notes => vault.change_notes_password(&current, &new),
-                Some(vault) => vault.change_master_password(&current, &new),
-                None => Err(VaultError::NotFound),
+        self.sync_job(
+            true,
+            move |slot| {
+                with_published_keys(slot, |v| {
+                    if notes {
+                        v.change_notes_password(&current, &new)?;
+                        return Ok((None, ()));
+                    }
+                    // A synced vault also moves its server login to the new password.
+                    let current_auth = v.is_sync_enabled()?.then(|| v.auth_key(&current)).transpose()?;
+                    v.change_master_password(&current, &new)?;
+                    let login = match current_auth {
+                        Some(current) => Some(LoginChange {
+                            current_auth_key: Zeroizing::new(current.expose().to_vec()),
+                            new_auth_key: Zeroizing::new(v.auth_key(&new)?.expose().to_vec()),
+                        }),
+                        None => None,
+                    };
+                    Ok((login, ()))
+                })
             },
             move |c, result| match result {
                 Ok(()) => c.status(&format!("The {what} password was changed."), false),
-                Err(e) => c.error(&describe(&e)),
+                Err(e) => c.error(&sync_message(&e)),
             },
         );
     }
 
     fn rotate_recovery_key(&self) {
-        let key = self.with_vault(|v| v.rotate_recovery_key().map(|k| k.display()));
-        if let Some(key) = key {
-            self.with_state(|s| {
-                s.set_recovery_key(key.as_str().into());
-                s.set_recovery_key_is_new_vault(false);
-                s.set_screen(VaultScreen::RecoveryKit);
-            });
-        }
+        self.sync_job(
+            true,
+            |slot| with_published_keys(slot, |v| Ok((None, v.rotate_recovery_key()?.display()))),
+            |c, result| match result {
+                Ok(key) => c.with_state(|s| {
+                    s.set_recovery_key(key.as_str().into());
+                    s.set_recovery_key_is_new_vault(false);
+                    s.set_screen(VaultScreen::RecoveryKit);
+                }),
+                Err(e) => c.error(&sync_message(&e)),
+            },
+        );
     }
 
     fn report_import(&self, summary: ImportSummary, skipped: usize) {
@@ -828,6 +909,7 @@ impl VaultController {
             message.push_str(&format!(" {skipped} entry(ies) could not be imported."));
         }
         self.status(&message, false);
+        self.schedule_sync();
     }
 
     fn import_file(&self) {
@@ -922,6 +1004,370 @@ impl VaultController {
             Err(e) => self.error(&format!("Cannot write {}: {e}", path.display())),
         }
     }
+}
+
+impl VaultController {
+    // ---------------------------------------------------------------------------------------
+    // Sync
+    // ---------------------------------------------------------------------------------------
+
+    /// Runs sync work on a background thread. The work receives the shared vault and locks it
+    /// only for local steps, so the UI stays responsive during network calls. With
+    /// `blocking`, forms show their busy state while it runs.
+    fn sync_job<T, W, D>(&self, blocking: bool, work: W, done: D)
+    where
+        T: Send + 'static,
+        W: FnOnce(&Mutex<Option<Vault>>) -> Result<T, SyncError> + Send + 'static,
+        D: FnOnce(&Rc<VaultController>, Result<T, SyncError>) + Send + 'static,
+    {
+        self.with_state(|s| {
+            s.set_sync_busy(true);
+            if blocking {
+                s.set_busy(true);
+                s.set_error(SharedString::new());
+            }
+        });
+        let vault = self.vault.clone();
+        std::thread::spawn(move || {
+            let result = work(&vault);
+            let _ = slint::invoke_from_event_loop(move || {
+                with_controller(|c| {
+                    c.with_state(|s| {
+                        s.set_sync_busy(false);
+                        if blocking {
+                            s.set_busy(false);
+                        }
+                    });
+                    done(c, result);
+                })
+            });
+        });
+    }
+
+    /// Copies the vault's sync configuration into the UI.
+    fn refresh_sync_state(&self) {
+        let info = self.vault().as_ref().map(|v| {
+            (
+                v.is_sync_enabled().unwrap_or(false),
+                v.sync_settings().ok().flatten(),
+                v.last_sync().ok().flatten(),
+                v.recovery_pending().unwrap_or(false),
+            )
+        });
+        let (enabled, settings, last, pending) = info.unwrap_or((false, None, None, false));
+        self.with_state(|s| {
+            s.set_sync_enabled(enabled && !s.get_sync_signed_out());
+            s.set_sync_recovery_pending(pending);
+            if let Some(settings) = &settings {
+                s.set_sync_server(settings.server_url.as_str().into());
+                s.set_sync_email(settings.email.as_str().into());
+            }
+            let status = last.map_or_else(
+                || "Not synced yet".to_owned(),
+                |t| format!("Last synced {}", format_sync_time(t)),
+            );
+            s.set_sync_status(status.into());
+            s.set_sync_status_is_error(false);
+        });
+    }
+
+    fn sync_now(&self) {
+        let mut ready = false;
+        self.with_state(|s| {
+            ready = s.get_screen() == VaultScreen::Unlocked
+                && s.get_sync_enabled()
+                && !s.get_sync_busy()
+                && !s.get_sync_signed_out();
+        });
+        if ready {
+            self.sync_job(false, vsync::sync, |c, result| c.after_sync(result));
+        }
+    }
+
+    /// Syncs shortly after a local change (several quick edits share one sync).
+    fn schedule_sync(&self) {
+        let mut enabled = false;
+        self.with_state(|s| enabled = s.get_sync_enabled());
+        if enabled {
+            self.sync_timer.start(TimerMode::SingleShot, SYNC_DEBOUNCE, || with_controller(|c| c.sync_now()));
+        }
+    }
+
+    fn after_sync(&self, result: Result<SyncReport, SyncError>) {
+        match result {
+            Ok(report) => {
+                if report.pulled > 0 || report.conflicts > 0 {
+                    self.refresh_after_remote_change();
+                }
+                self.refresh_sync_state();
+                if report.conflicts > 0 {
+                    self.status(
+                        &format!(
+                            "Sync: {} item(s) were edited on two devices; both versions were kept.",
+                            report.conflicts
+                        ),
+                        false,
+                    );
+                } else if report.keys_updated {
+                    self.status(
+                        "A password was changed on another device. Use the new one next time you unlock.",
+                        false,
+                    );
+                }
+            }
+            Err(e) if e.is_unauthorized() => self.with_state(|s| {
+                s.set_sync_signed_out(true);
+                s.set_sync_enabled(false);
+                s.set_sync_status("Signed out by the sync server".into());
+                s.set_sync_status_is_error(true);
+            }),
+            Err(e) => self.with_state(|s| {
+                s.set_sync_status(format!("Sync failed: {}", sync_message(&e)).into());
+                s.set_sync_status_is_error(true);
+            }),
+        }
+    }
+
+    /// Reloads the list after a sync changed items, keeping the user's place.
+    fn refresh_after_remote_change(&self) {
+        self.refresh_records();
+        let (mut panel, mut selected, mut editing_note) = (VaultPanel::Detail, SharedString::new(), false);
+        self.with_state(|s| {
+            panel = s.get_panel();
+            selected = s.get_selected_id();
+            editing_note = !s.get_editing_note_id().is_empty();
+        });
+        if panel != VaultPanel::Detail || selected.is_empty() || editing_note {
+            return;
+        }
+        match self.find_record(&selected) {
+            Some(record) => self.show_detail(&record),
+            None => self.with_state(|s| {
+                s.set_selected_id(SharedString::new());
+                s.set_detail(RecordDetail::default());
+            }),
+        }
+    }
+
+    fn sync_setup(
+        &self,
+        url: String,
+        email: String,
+        device: String,
+        password: Secret,
+        invite: String,
+        create: bool,
+    ) {
+        if email.trim().is_empty() || device.trim().is_empty() {
+            return self.error("Enter an email and a name for this device.");
+        }
+        self.sync_job(
+            true,
+            move |slot| {
+                let account = Account { server_url: &url, email: &email, device_name: &device };
+                if create {
+                    vsync::create_account(slot, &account, &password, Some(&invite))?;
+                } else {
+                    vsync::sign_in(slot, &account, &password)?;
+                }
+                vsync::sync(slot)
+            },
+            |c, result| {
+                c.with_state(|s| s.set_sync_signed_out(false));
+                c.refresh_sync_state();
+                match result {
+                    Ok(report) => {
+                        c.after_sync(Ok(report));
+                        c.status("Sync is on for this vault.", false);
+                    }
+                    Err(e) => c.error(&sync_message(&e)),
+                }
+            },
+        );
+    }
+
+    fn current_account(&self) -> Option<(String, String, String)> {
+        let settings = self.vault().as_ref().and_then(|v| v.sync_settings().ok().flatten())?;
+        Some((settings.server_url, settings.email, settings.device_name))
+    }
+
+    fn sync_sign_in_again(&self, password: Secret) {
+        let Some((url, email, device)) = self.current_account() else { return };
+        self.sync_job(
+            true,
+            move |slot| {
+                vsync::sign_in(
+                    slot,
+                    &Account { server_url: &url, email: &email, device_name: &device },
+                    &password,
+                )?;
+                vsync::sync(slot)
+            },
+            |c, result| match result {
+                Ok(report) => {
+                    c.with_state(|s| s.set_sync_signed_out(false));
+                    c.after_sync(Ok(report));
+                    c.status("Signed in again.", false);
+                }
+                Err(e) => c.error(&sync_message(&e)),
+            },
+        );
+    }
+
+    fn sync_finish_recovery(&self, password: Secret) {
+        self.sync_job(
+            true,
+            move |slot| {
+                vsync::recover_account(slot, &password)?;
+                vsync::sync(slot)
+            },
+            |c, result| match result {
+                Ok(report) => {
+                    c.with_state(|s| s.set_sync_signed_out(false));
+                    c.after_sync(Ok(report));
+                    c.status("The sync server now uses your new password.", false);
+                }
+                Err(e) => c.error(&sync_message(&e)),
+            },
+        );
+    }
+
+    fn sync_sign_out(&self) {
+        self.sync_job(true, vsync::sign_out, |c, result| {
+            c.with_state(|s| {
+                s.set_sync_signed_out(false);
+                s.set_sync_devices(ModelRc::default());
+            });
+            c.refresh_sync_state();
+            match result {
+                Ok(()) => c.status("Sync is off on this device. Your vault stays here.", false),
+                Err(e) => c.error(&sync_message(&e)),
+            }
+        });
+    }
+
+    fn show_devices(&self, result: Result<Vec<simplus_vault_proto::DeviceSession>, SyncError>) {
+        match result {
+            Ok(devices) => {
+                let rows: Vec<DeviceRow> = devices
+                    .into_iter()
+                    .map(|d| DeviceRow {
+                        id: d.id.to_string().into(),
+                        name: d.name.into(),
+                        last_seen: DateTime::from_timestamp(d.last_seen, 0)
+                            .map(format_sync_time)
+                            .unwrap_or_default()
+                            .into(),
+                        current: d.current,
+                    })
+                    .collect();
+                self.with_state(|s| s.set_sync_devices(ModelRc::new(VecModel::from(rows))));
+            }
+            Err(e) => self.after_sync(Err(e)),
+        }
+    }
+
+    fn sync_load_devices(&self) {
+        self.sync_job(false, vsync::devices, |c, result| c.show_devices(result));
+    }
+
+    fn sync_revoke_device(&self, id: &str) {
+        let Ok(id) = Uuid::parse_str(id) else { return };
+        self.sync_job(
+            false,
+            move |slot| {
+                vsync::revoke_device(slot, id)?;
+                vsync::devices(slot)
+            },
+            |c, result| c.show_devices(result),
+        );
+    }
+
+    /// New device: builds the local vault from a sync account, then downloads the items.
+    fn download_vault(&self, url: String, email: String, device: String, password: Secret) {
+        if Vault::exists(&self.path) {
+            return self.error("A vault already exists on this device.");
+        }
+        let path = self.path.clone();
+        self.sync_job(
+            true,
+            move |slot| {
+                let account = Account { server_url: &url, email: &email, device_name: &device };
+                let vault = vsync::download_vault(&path, &account, &password)?;
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(vault);
+                Ok(vsync::sync(slot).err())
+            },
+            |c, result| match result {
+                Ok(sync_error) => {
+                    c.with_state(|s| {
+                        s.set_screen(VaultScreen::Unlocked);
+                        s.set_panel(VaultPanel::Detail);
+                    });
+                    c.refresh_records();
+                    c.refresh_sync_state();
+                    match sync_error {
+                        None => c.status("Vault downloaded and in sync.", false),
+                        Some(e) => c.after_sync(Err(e)),
+                    }
+                }
+                Err(e) => c.error(&sync_message(&e)),
+            },
+        );
+    }
+}
+
+/// Applies a local key change and, on a synced vault, publishes the new key bundle. If the
+/// server cannot be updated the local change is undone, so devices never disagree on keys.
+fn with_published_keys<T>(
+    slot: &Mutex<Option<Vault>>,
+    change: impl FnOnce(&mut Vault) -> Result<(Option<LoginChange>, T), VaultError>,
+) -> Result<T, SyncError> {
+    let (snapshot, synced, login, value) = slot.with_vault(|v| {
+        let synced = v.is_sync_enabled()?;
+        let snapshot = v.key_bundle()?;
+        let (login, value) = change(v)?;
+        Ok((snapshot, synced, login, value))
+    })?;
+    if synced && let Err(e) = vsync::publish_keys(slot, login) {
+        slot.with_vault(|v| Ok(v.apply_key_bundle(&snapshot)?))?;
+        return Err(e);
+    }
+    Ok(value)
+}
+
+fn sync_message(error: &SyncError) -> String {
+    match error {
+        SyncError::Vault(e) => describe(e),
+        other => {
+            let mut text = other.to_string();
+            if let Some(first) = text.get_mut(0..1) {
+                first.make_ascii_uppercase();
+            }
+            if !text.ends_with('.') {
+                text.push('.');
+            }
+            text
+        }
+    }
+}
+
+fn format_sync_time(t: DateTime<Utc>) -> String {
+    let local = t.with_timezone(&Local);
+    if local.date_naive() == Local::now().date_naive() {
+        local.format("%H:%M").to_string()
+    } else {
+        local.format("%Y-%m-%d %H:%M").to_string()
+    }
+}
+
+fn default_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .or_else(|| std::fs::read_to_string("/etc/hostname").ok())
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "This computer".to_owned())
 }
 
 // -------------------------------------------------------------------------------------------
