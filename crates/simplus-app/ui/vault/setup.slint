@@ -1,0 +1,265 @@
+import { Button, LineEdit, CheckBox, Spinner, Palette } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Card, SectionTitle, Caption, ErrorText, StrengthMeter, Link } from "../components.slint";
+import { VaultState, Strength } from "state.slint";
+
+component PasswordInput inherits LineEdit {
+    input-type: InputType.password;
+    edited => {
+        VaultState.error = "";
+        VaultState.activity();
+    }
+}
+
+component BusyRow inherits HorizontalLayout {
+    in property <string> text;
+    spacing: Theme.gap;
+    alignment: center;
+    Spinner {
+        indeterminate: true;
+        width: 20px;
+        height: 20px;
+    }
+    Caption {
+        text: root.text;
+        vertical-alignment: center;
+    }
+}
+
+component CenteredCard inherits Rectangle {
+    in property <length> card-width: 480px;
+    Card {
+        width: min(root.card-width, root.width - 32px);
+        height: inner.preferred-height;
+        inner := VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            @children
+        }
+    }
+}
+
+component PasswordPair inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    out property <string> value: first.text;
+    out property <string> confirm: second.text;
+    property <Strength> strength: VaultState.strength(first.text);
+    spacing: 6px;
+    Text {
+        text: root.label;
+        font-weight: 600;
+        color: Palette.foreground;
+    }
+    if root.hint != "": Caption { text: root.hint; }
+    first := PasswordInput { placeholder-text: @tr("Password"); }
+    second := PasswordInput { placeholder-text: @tr("Confirm password"); }
+    StrengthMeter {
+        active: first.text != "";
+        score: root.strength.score;
+        label: root.strength.label;
+        detail: root.strength.warning != "" ? root.strength.warning : root.strength.crack-time;
+    }
+}
+
+export component CreateVaultView inherits CenteredCard {
+    card-width: 520px;
+    SectionTitle {
+        text: @tr("Create your password vault");
+        font-size: Theme.font-title;
+    }
+    Caption {
+        text: @tr("Your vault is encrypted on this device with Argon2id and XChaCha20-Poly1305. Nobody, including Simplus, can recover these passwords; a recovery key is created in the next step.");
+    }
+    master := PasswordPair {
+        label: @tr("Master password");
+        hint: @tr("Unlocks the vault and shows record passwords.");
+    }
+    notes := PasswordPair {
+        label: @tr("Secure notes password");
+        hint: @tr("A second, different password that protects secure notes.");
+    }
+    if VaultState.error != "": ErrorText { text: VaultState.error; }
+    if VaultState.busy: BusyRow { text: @tr("Deriving keys…"); }
+    Button {
+        text: @tr("Create vault");
+        primary: true;
+        enabled: !VaultState.busy;
+        clicked => {
+            VaultState.create-vault(master.value, master.confirm, notes.value, notes.confirm);
+        }
+    }
+    Link {
+        text: @tr("Already use Simplus sync on another device? Sign in instead");
+        clicked => { VaultState.show-download(); }
+    }
+}
+
+/// New device: create the local vault from an existing sync account.
+export component DownloadVaultView inherits CenteredCard {
+    card-width: 520px;
+    SectionTitle {
+        text: @tr("Sign in to your synced vault");
+        font-size: Theme.font-title;
+    }
+    Caption {
+        text: @tr("Your vault is downloaded encrypted and decrypted on this device with your master password. The server never sees it.");
+    }
+    url := LineEdit {
+        placeholder-text: @tr("Server address, e.g. https://sync.example.com");
+        enabled: !VaultState.busy;
+    }
+    email := LineEdit {
+        placeholder-text: @tr("Email");
+        enabled: !VaultState.busy;
+    }
+    device := LineEdit {
+        text: VaultState.default-device-name;
+        placeholder-text: @tr("Name of this device");
+        enabled: !VaultState.busy;
+    }
+    password := PasswordInput {
+        placeholder-text: @tr("Master password");
+        enabled: !VaultState.busy;
+        accepted => { VaultState.download-vault(url.text, email.text, device.text, self.text); }
+    }
+    if VaultState.error != "": ErrorText { text: VaultState.error; }
+    if VaultState.busy: BusyRow { text: @tr("Signing in and downloading…"); }
+    HorizontalLayout {
+        spacing: Theme.gap;
+        Button {
+            text: @tr("Back");
+            enabled: !VaultState.busy;
+            clicked => { VaultState.cancel-download(); }
+        }
+        Button {
+            text: @tr("Sign in");
+            primary: true;
+            enabled: !VaultState.busy && url.text != "" && email.text != "" && password.text != "";
+            clicked => { VaultState.download-vault(url.text, email.text, device.text, password.text); }
+        }
+    }
+}
+
+export component RecoveryKitView inherits CenteredCard {
+    card-width: 560px;
+    property <bool> stored;
+    SectionTitle {
+        text: @tr("Save your recovery key");
+        font-size: Theme.font-title;
+    }
+    Caption {
+        text: @tr("If you forget either password, this key is the only way to reset them. Store it offline (print it or keep it in a safe place). It is shown only once.");
+    }
+    Rectangle {
+        background: Palette.background;
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Palette.border;
+        height: key-text.preferred-height + 24px;
+        key-text := Text {
+            x: 12px;
+            width: parent.width - 24px;
+            text: VaultState.recovery-key;
+            font-family: Theme.mono-font;
+            font-size: 16px;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+            color: Palette.foreground;
+        }
+    }
+    HorizontalLayout {
+        spacing: Theme.gap;
+        Button {
+            text: @tr("Copy");
+            clicked => { VaultState.copy-recovery-key(); }
+        }
+        Button {
+            text: @tr("Save to file…");
+            clicked => { VaultState.save-recovery-key(); }
+        }
+    }
+    CheckBox {
+        text: @tr("I have stored my recovery key in a safe place");
+        checked <=> root.stored;
+    }
+    Button {
+        text: @tr("Continue");
+        primary: true;
+        enabled: root.stored;
+        clicked => {
+            root.stored = false;
+            VaultState.recovery-kit-done();
+        }
+    }
+}
+
+export component UnlockView inherits CenteredCard {
+    card-width: 420px;
+    SectionTitle {
+        text: @tr("Vault locked");
+        font-size: Theme.font-title;
+    }
+    Caption { text: @tr("Enter your master password to unlock."); }
+    password := PasswordInput {
+        placeholder-text: @tr("Master password");
+        enabled: !VaultState.busy;
+        accepted => { VaultState.unlock(self.text); }
+        init => { self.focus(); }
+    }
+    if VaultState.error != "": ErrorText { text: VaultState.error; }
+    if VaultState.busy: BusyRow { text: @tr("Unlocking…"); }
+    Button {
+        text: @tr("Unlock");
+        primary: true;
+        enabled: !VaultState.busy;
+        clicked => { VaultState.unlock(password.text); }
+    }
+    Link {
+        text: @tr("Forgot a password? Use your recovery key");
+        clicked => { VaultState.show-recover(); }
+    }
+    public function clear() {
+        password.text = "";
+    }
+}
+
+export component RecoverView inherits CenteredCard {
+    card-width: 520px;
+    SectionTitle {
+        text: @tr("Reset passwords with recovery key");
+        font-size: Theme.font-title;
+    }
+    Caption { text: @tr("Both passwords are replaced. Your records and notes are kept."); }
+    key := LineEdit {
+        placeholder-text: @tr("Recovery key (XXXX-XXXX-…)");
+        font-family: Theme.mono-font;
+        edited => { VaultState.activity(); }
+    }
+    master := PasswordPair {
+        label: @tr("New master password");
+        hint: "";
+    }
+    notes := PasswordPair {
+        label: @tr("New secure notes password");
+        hint: "";
+    }
+    if VaultState.error != "": ErrorText { text: VaultState.error; }
+    if VaultState.busy: BusyRow { text: @tr("Deriving keys…"); }
+    HorizontalLayout {
+        spacing: Theme.gap;
+        Button {
+            text: @tr("Back");
+            enabled: !VaultState.busy;
+            clicked => { VaultState.cancel-recover(); }
+        }
+        Button {
+            text: @tr("Reset passwords");
+            primary: true;
+            enabled: !VaultState.busy;
+            clicked => {
+                VaultState.recover(key.text, master.value, master.confirm, notes.value, notes.confirm);
+            }
+        }
+    }
+}

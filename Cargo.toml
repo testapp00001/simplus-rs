@@ -1,0 +1,70 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "server/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+authors = ["Simplus contributors"]
+repository = "https://github.com/testapp00001/simplus-rs"
+publish = false
+
+[workspace.dependencies]
+# Internal crates
+simplus-core = { path = "crates/simplus-core" }
+simplus-crypto = { path = "crates/simplus-crypto" }
+simplus-vault-core = { path = "crates/simplus-vault-core" }
+simplus-vault-proto = { path = "crates/simplus-vault-proto" }
+simplus-vault-sync = { path = "crates/simplus-vault-sync" }
+simplus-ui-kit = { path = "crates/simplus-ui-kit" }
+
+# Crypto
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize", "parallel"] }
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
+hkdf = "0.13"
+sha2 = "0.11"
+getrandom = "0.4"
+zeroize = { version = "1.9", features = ["derive"] }
+
+# Core
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+directories = "6"
+rusqlite = { version = "0.40", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+croner = "4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+uuid = { version = "1", features = ["v7"] }
+
+# UI
+slint = "1.18"
+slint-build = "1.18"
+slint-interpreter = "1.18"
+
+# Dev
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+# Argon2 is painfully slow unoptimised; keep crypto fast in debug/test builds.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

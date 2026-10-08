@@ -1,0 +1,38 @@
+[package]
+name = "simplus-app"
+description = "Simplus desktop application: Slint shell and official modules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "simplus"
+path = "src/main.rs"
+
+[dependencies]
+simplus-core.workspace = true
+simplus-vault-core.workspace = true
+simplus-vault-sync.workspace = true
+simplus-vault-proto.workspace = true
+slint.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+zeroize.workspace = true
+sha2.workspace = true
+arboard = { version = "3.6", default-features = false }
+rfd = "0.17"
+single-instance = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_RemoteDesktop"] }
+
+[build-dependencies]
+slint-build.workspace = true
+
+[lints]
+workspace = true

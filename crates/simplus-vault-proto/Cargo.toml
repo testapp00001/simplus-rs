@@ -1,0 +1,20 @@
+[package]
+name = "simplus-vault-proto"
+description = "Wire types shared by the Simplus vault sync client and server."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+data-encoding = "2"
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

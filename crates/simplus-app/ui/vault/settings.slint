@@ -1,0 +1,336 @@
+import { Button, LineEdit, CheckBox, ScrollView, Palette } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { Card, SectionTitle, Caption, ErrorText } from "../components.slint";
+import { VaultState, DeviceRow } from "state.slint";
+
+component PasswordChange inherits Card {
+    in property <string> title;
+    in property <string> current-label;
+    callback submit(string, string, string);
+    height: layout.preferred-height;
+
+    layout := VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        SectionTitle { text: root.title; }
+        current := LineEdit {
+            input-type: InputType.password;
+            placeholder-text: root.current-label;
+        }
+        new := LineEdit {
+            input-type: InputType.password;
+            placeholder-text: @tr("New password");
+        }
+        confirm := LineEdit {
+            input-type: InputType.password;
+            placeholder-text: @tr("Confirm new password");
+        }
+        HorizontalLayout {
+            alignment: end;
+            Button {
+                text: @tr("Change");
+                enabled: !VaultState.busy && current.text != "" && new.text != "";
+                clicked => {
+                    root.submit(current.text, new.text, confirm.text);
+                    current.text = "";
+                    new.text = "";
+                    confirm.text = "";
+                }
+            }
+        }
+    }
+}
+
+component SyncCard inherits Card {
+    property <bool> show-devices;
+
+    layout := VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+        SectionTitle { text: @tr("Sync"); }
+
+        // Wrapped captions sit directly in this layout: inside a conditional nested layout
+        // their height is measured before wrapping and the card ends up too short.
+        if !VaultState.sync-enabled && !VaultState.sync-signed-out: Caption {
+            text: @tr("Keep this vault in sync across your devices through your own or a trusted Simplus sync server. Items are encrypted on this device; the server only stores ciphertext and never learns your passwords.");
+        }
+        if !VaultState.sync-enabled && !VaultState.sync-signed-out: VerticalLayout {
+            spacing: 8px;
+            url := LineEdit { placeholder-text: @tr("Server address, e.g. https://sync.example.com"); }
+            email := LineEdit { placeholder-text: @tr("Email"); }
+            device := LineEdit {
+                text: VaultState.default-device-name;
+                placeholder-text: @tr("Name of this device");
+            }
+            password := LineEdit {
+                input-type: InputType.password;
+                placeholder-text: @tr("Master password (to confirm)");
+            }
+            invite := LineEdit { placeholder-text: @tr("Invite code (only if the server asks for one)"); }
+            HorizontalLayout {
+                spacing: Theme.gap;
+                alignment: end;
+                Button {
+                    text: @tr("Sign in to existing account");
+                    enabled: !VaultState.busy && url.text != "" && email.text != "" && password.text != "";
+                    clicked => {
+                        VaultState.sync-setup(url.text, email.text, device.text, password.text, invite.text, false);
+                        password.text = "";
+                    }
+                }
+                Button {
+                    text: @tr("Create account");
+                    primary: true;
+                    enabled: !VaultState.busy && url.text != "" && email.text != "" && password.text != "";
+                    clicked => {
+                        VaultState.sync-setup(url.text, email.text, device.text, password.text, invite.text, true);
+                        password.text = "";
+                    }
+                }
+            }
+        }
+
+        if VaultState.sync-signed-out: Caption {
+            text: @tr("The server signed this device out (for example after the master password was changed on another device). Sign in again with your current master password.");
+            color: Theme.warning;
+        }
+        if VaultState.sync-signed-out: VerticalLayout {
+            spacing: 8px;
+            again := LineEdit {
+                input-type: InputType.password;
+                placeholder-text: @tr("Current master password");
+            }
+            HorizontalLayout {
+                spacing: Theme.gap;
+                alignment: end;
+                Button {
+                    text: @tr("Stop syncing");
+                    clicked => { VaultState.sync-sign-out(); }
+                }
+                Button {
+                    text: @tr("Sign in again");
+                    primary: true;
+                    enabled: !VaultState.busy && again.text != "";
+                    clicked => {
+                        VaultState.sync-sign-in-again(again.text);
+                        again.text = "";
+                    }
+                }
+            }
+        }
+
+        if VaultState.sync-recovery-pending: Caption {
+            text: @tr("Your passwords were reset with the recovery key, but the sync server has not been updated yet. Enter the new master password to finish.");
+            color: Theme.warning;
+        }
+        if VaultState.sync-recovery-pending: VerticalLayout {
+            spacing: 8px;
+            finish := LineEdit {
+                input-type: InputType.password;
+                placeholder-text: @tr("New master password");
+            }
+            HorizontalLayout {
+                alignment: end;
+                Button {
+                    text: @tr("Finish recovery on server");
+                    primary: true;
+                    enabled: !VaultState.busy && finish.text != "";
+                    clicked => {
+                        VaultState.sync-finish-recovery(finish.text);
+                        finish.text = "";
+                    }
+                }
+            }
+        }
+
+        if VaultState.sync-enabled: Text {
+            text: @tr("Signed in as {} on {}", VaultState.sync-email, VaultState.sync-server);
+            wrap: word-wrap;
+            color: Palette.foreground;
+        }
+        if VaultState.sync-enabled: Caption {
+            text: VaultState.sync-busy ? @tr("Syncing…") : VaultState.sync-status;
+            color: VaultState.sync-status-is-error ? Theme.danger : Theme.muted;
+        }
+        if VaultState.sync-enabled: VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: Theme.gap;
+                alignment: end;
+                Button {
+                    text: @tr("Sign out");
+                    clicked => { VaultState.sync-sign-out(); }
+                }
+                Button {
+                    text: root.show-devices ? @tr("Hide devices") : @tr("Devices");
+                    clicked => {
+                        root.show-devices = !root.show-devices;
+                        if root.show-devices {
+                            VaultState.sync-load-devices();
+                        }
+                    }
+                }
+                Button {
+                    text: @tr("Sync now");
+                    primary: true;
+                    enabled: !VaultState.sync-busy;
+                    clicked => { VaultState.sync-now(); }
+                }
+            }
+            if root.show-devices: VerticalLayout {
+                spacing: 4px;
+                for device in VaultState.sync-devices: HorizontalLayout {
+                    spacing: Theme.gap;
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        Text {
+                            text: device.current ? @tr("{} (this device)", device.name) : device.name;
+                            color: Palette.foreground;
+                        }
+                        Caption { text: @tr("Last active {}", device.last-seen); }
+                    }
+                    if !device.current: Button {
+                        text: @tr("Sign out device");
+                        clicked => { VaultState.sync-revoke-device(device.id); }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component VaultSettingsView inherits ScrollView {
+    property <bool> csv-acknowledged;
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 14px;
+        alignment: start;
+
+        HorizontalLayout {
+            SectionTitle {
+                text: @tr("Vault settings");
+                font-size: Theme.font-title;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: @tr("Close");
+                clicked => { VaultState.close-settings(); }
+            }
+        }
+        if VaultState.error != "": ErrorText { text: VaultState.error; }
+
+        SyncCard { }
+
+        PasswordChange {
+            title: @tr("Change master password");
+            current-label: @tr("Current master password");
+            submit(c, n, k) => { VaultState.change-master-password(c, n, k); }
+        }
+        PasswordChange {
+            title: @tr("Change secure notes password");
+            current-label: @tr("Current secure notes password");
+            submit(c, n, k) => { VaultState.change-notes-password(c, n, k); }
+        }
+
+        Card {
+            height: recovery.preferred-height;
+            recovery := VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                SectionTitle { text: @tr("Recovery key"); }
+                Caption { text: @tr("Create a new recovery key if the old one was lost or seen by someone else. The old key stops working. Requires secure notes to be unlocked."); }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: @tr("Create new recovery key");
+                        enabled: VaultState.notes-unlocked && !VaultState.busy;
+                        clicked => { VaultState.rotate-recovery-key(); }
+                    }
+                }
+            }
+        }
+
+        Card {
+            height: import.preferred-height;
+            import := VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                SectionTitle { text: @tr("Import"); }
+                Caption { text: @tr("Bitwarden (JSON or CSV), Chrome/Edge, Firefox, KeePassXC or any CSV with title/username/password columns. Notes become secure notes, so unlock them first."); }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: @tr("Import from file…");
+                        enabled: !VaultState.busy;
+                        clicked => { VaultState.import-file(); }
+                    }
+                }
+            }
+        }
+
+        Card {
+            height: backup.preferred-height;
+            backup := VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                SectionTitle { text: @tr("Encrypted backup"); }
+                Caption { text: @tr("A .simplusvault file with all items and secure notes, protected by a password of your choice. Requires secure notes to be unlocked."); }
+                backup-password := LineEdit {
+                    input-type: InputType.password;
+                    placeholder-text: @tr("Backup password");
+                }
+                backup-confirm := LineEdit {
+                    input-type: InputType.password;
+                    placeholder-text: @tr("Confirm backup password (for export)");
+                }
+                HorizontalLayout {
+                    spacing: Theme.gap;
+                    alignment: end;
+                    Button {
+                        text: @tr("Restore backup…");
+                        enabled: !VaultState.busy && backup-password.text != "";
+                        clicked => { VaultState.restore-backup(backup-password.text); }
+                    }
+                    Button {
+                        text: @tr("Export backup…");
+                        enabled: !VaultState.busy && VaultState.notes-unlocked && backup-password.text != "";
+                        clicked => {
+                            VaultState.export-backup(backup-password.text, backup-confirm.text);
+                            backup-password.text = "";
+                            backup-confirm.text = "";
+                        }
+                    }
+                }
+            }
+        }
+
+        Card {
+            height: csv.preferred-height;
+            csv := VerticalLayout {
+                padding: 14px;
+                spacing: 8px;
+                SectionTitle { text: @tr("Export as CSV (unencrypted)"); }
+                Caption {
+                    text: @tr("Anyone who gets this file can read every password. Delete it as soon as you have imported it elsewhere.");
+                    color: Theme.danger;
+                }
+                CheckBox {
+                    text: @tr("I understand the file is not encrypted");
+                    checked <=> root.csv-acknowledged;
+                }
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: @tr("Export CSV…");
+                        enabled: root.csv-acknowledged;
+                        clicked => {
+                            root.csv-acknowledged = false;
+                            VaultState.export-csv();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

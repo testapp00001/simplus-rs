@@ -1,0 +1,184 @@
+import { Button, CheckBox, SpinBox, LineEdit, Palette } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { SectionTitle, Caption, StrengthMeter } from "../components.slint";
+import { VaultState, Strength } from "state.slint";
+
+/// Password / passphrase generator. `use(value)` is emitted when the user accepts a value.
+export component GeneratorPopup inherits PopupWindow {
+    in property <bool> can-use: true;
+    callback use(string);
+
+    property <bool> passphrase;
+    property <int> length: 20;
+    property <bool> lowercase: true;
+    property <bool> uppercase: true;
+    property <bool> digits: true;
+    property <bool> symbols: true;
+    property <bool> exclude-ambiguous;
+    property <int> words: 5;
+    property <bool> capitalize: true;
+    property <bool> include-number: true;
+    property <string> value;
+    property <Strength> strength: VaultState.strength(root.value);
+
+    close-policy: PopupClosePolicy.close-on-click-outside;
+    width: 400px;
+
+    function regenerate() {
+        root.value = VaultState.generate({
+            passphrase: root.passphrase,
+            length: root.length,
+            lowercase: root.lowercase,
+            uppercase: root.uppercase,
+            digits: root.digits,
+            symbols: root.symbols,
+            exclude-ambiguous: root.exclude-ambiguous,
+            words: root.words,
+            separator: "-",
+            capitalize: root.capitalize,
+            include-number: root.include-number,
+        });
+    }
+
+    init => { root.regenerate(); }
+
+    Rectangle {
+        background: Palette.background;
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Palette.border;
+        drop-shadow-blur: 16px;
+        drop-shadow-color: #00000040;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+            SectionTitle { text: @tr("Generate"); }
+            HorizontalLayout {
+                spacing: Theme.gap;
+                Button {
+                    text: @tr("Password");
+                    checkable: true;
+                    checked: !root.passphrase;
+                    clicked => {
+                        root.passphrase = false;
+                        root.regenerate();
+                    }
+                }
+                Button {
+                    text: @tr("Passphrase");
+                    checkable: true;
+                    checked: root.passphrase;
+                    clicked => {
+                        root.passphrase = true;
+                        root.regenerate();
+                    }
+                }
+            }
+            if !root.passphrase: VerticalLayout {
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: Theme.gap;
+                    Text {
+                        text: @tr("Length");
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                    }
+                    SpinBox {
+                        minimum: 8;
+                        maximum: 128;
+                        value <=> root.length;
+                        edited => { root.regenerate(); }
+                    }
+                }
+                HorizontalLayout {
+                    CheckBox {
+                        text: "a-z";
+                        checked <=> root.lowercase;
+                        toggled => { root.regenerate(); }
+                    }
+                    CheckBox {
+                        text: "A-Z";
+                        checked <=> root.uppercase;
+                        toggled => { root.regenerate(); }
+                    }
+                    CheckBox {
+                        text: "0-9";
+                        checked <=> root.digits;
+                        toggled => { root.regenerate(); }
+                    }
+                    CheckBox {
+                        text: "!@#";
+                        checked <=> root.symbols;
+                        toggled => { root.regenerate(); }
+                    }
+                }
+                CheckBox {
+                    text: @tr("Avoid look-alike characters (l, 1, O, 0)");
+                    checked <=> root.exclude-ambiguous;
+                    toggled => { root.regenerate(); }
+                }
+            }
+            if root.passphrase: VerticalLayout {
+                spacing: 6px;
+                HorizontalLayout {
+                    spacing: Theme.gap;
+                    Text {
+                        text: @tr("Words");
+                        vertical-alignment: center;
+                        color: Palette.foreground;
+                    }
+                    SpinBox {
+                        minimum: 3;
+                        maximum: 20;
+                        value <=> root.words;
+                        edited => { root.regenerate(); }
+                    }
+                }
+                HorizontalLayout {
+                    CheckBox {
+                        text: @tr("Capitalize");
+                        checked <=> root.capitalize;
+                        toggled => { root.regenerate(); }
+                    }
+                    CheckBox {
+                        text: @tr("Add a number");
+                        checked <=> root.include-number;
+                        toggled => { root.regenerate(); }
+                    }
+                }
+            }
+            LineEdit {
+                text: root.value;
+                read-only: true;
+                font-family: Theme.mono-font;
+            }
+            StrengthMeter {
+                active: root.value != "";
+                score: root.strength.score;
+                label: root.strength.label;
+                detail: root.strength.crack-time;
+            }
+            HorizontalLayout {
+                spacing: Theme.gap;
+                Button {
+                    text: @tr("Regenerate");
+                    clicked => { root.regenerate(); }
+                }
+                Button {
+                    text: @tr("Copy");
+                    clicked => { VaultState.copy(root.value, true); }
+                }
+                if root.can-use: Button {
+                    text: @tr("Use");
+                    primary: true;
+                    enabled: root.value != "";
+                    clicked => {
+                        root.use(root.value);
+                        root.close();
+                    }
+                }
+            }
+        }
+    }
+}

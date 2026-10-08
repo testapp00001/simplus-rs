@@ -1,0 +1,191 @@
+export enum VaultScreen { loading, create, recovery-kit, locked, recover, unlocked, download }
+
+/// What the right-hand pane of the unlocked vault shows.
+export enum VaultPanel { detail, edit, settings }
+
+export struct RecordRow {
+    id: string,
+    title: string,
+    subtitle: string,
+    favorite: bool,
+    has-totp: bool,
+}
+
+export struct FieldRow {
+    name: string,
+    value: string,
+    hidden: bool,
+}
+
+export struct HistoryRow {
+    password: string,
+    changed: string,
+}
+
+export struct RecordDetail {
+    id: string,
+    title: string,
+    username: string,
+    password: string,
+    /// One URL per line (for editing).
+    urls: string,
+    url-list: [string],
+    folder: string,
+    /// Comma-separated.
+    tags: string,
+    favorite: bool,
+    totp: string,
+    fields: [FieldRow],
+    history: [HistoryRow],
+    created: string,
+    updated: string,
+}
+
+export struct DeviceRow {
+    id: string,
+    name: string,
+    last-seen: string,
+    current: bool,
+}
+
+export struct NoteRow {
+    id: string,
+    title: string,
+    body: string,
+    updated: string,
+}
+
+export struct Strength {
+    score: int,
+    label: string,
+    crack-time: string,
+    warning: string,
+}
+
+export struct GeneratorOptions {
+    passphrase: bool,
+    length: int,
+    lowercase: bool,
+    uppercase: bool,
+    digits: bool,
+    symbols: bool,
+    exclude-ambiguous: bool,
+    words: int,
+    separator: string,
+    capitalize: bool,
+    include-number: bool,
+}
+
+/// Shared state between the vault screens and the Rust controller.
+export global VaultState {
+    in-out property <VaultScreen> screen: VaultScreen.loading;
+    in-out property <VaultPanel> panel: VaultPanel.detail;
+    /// A slow (key-derivation) operation is running.
+    in-out property <bool> busy;
+    /// Error for the form currently shown.
+    in-out property <string> error;
+    /// Transient status line ("Copied", "Saved", ...).
+    in-out property <string> status;
+    in-out property <bool> status-is-error;
+
+    // Recovery kit
+    in-out property <string> recovery-key;
+    in-out property <bool> recovery-key-is-new-vault: true;
+
+    // Record list
+    in-out property <[RecordRow]> records;
+    in-out property <int> record-total;
+    in-out property <string> selected-id;
+    in-out property <bool> favorites-only;
+
+    // Selected record
+    in-out property <RecordDetail> detail;
+    in-out property <[FieldRow]> edit-fields;
+    in-out property <string> totp-code;
+    in-out property <int> totp-remaining;
+    in-out property <int> totp-period: 30;
+    in-out property <string> totp-error;
+
+    // Secure notes of the selected record
+    in-out property <bool> notes-unlocked;
+    in-out property <int> note-count;
+    in-out property <[NoteRow]> notes;
+    /// Id of the note being edited, "new" for a new note, "" for none.
+    in-out property <string> editing-note-id;
+
+    // Sync
+    in-out property <bool> sync-enabled;
+    in-out property <bool> sync-busy;
+    /// The server no longer accepts this device's session (e.g. password changed elsewhere).
+    in-out property <bool> sync-signed-out;
+    /// Passwords were reset with the recovery key but the server login is not updated yet.
+    in-out property <bool> sync-recovery-pending;
+    in-out property <string> sync-server;
+    in-out property <string> sync-email;
+    in-out property <string> sync-status;
+    in-out property <bool> sync-status-is-error;
+    in-out property <string> default-device-name;
+    in-out property <[DeviceRow]> sync-devices;
+
+    // Setup and unlock
+    callback create-vault(string, string, string, string);
+    callback recovery-kit-done();
+    callback copy-recovery-key();
+    callback save-recovery-key();
+    callback unlock(string);
+    callback show-recover();
+    callback cancel-recover();
+    callback recover(string, string, string, string, string);
+    callback lock();
+
+    // Browsing and editing
+    callback search(string);
+    callback set-favorites-only(bool);
+    callback select-record(string);
+    callback new-record();
+    callback edit-record();
+    callback cancel-edit();
+    callback save-record(RecordDetail);
+    callback delete-record(string);
+    callback toggle-favorite(string);
+    callback copy(string, bool);
+    callback copy-totp();
+    callback add-field();
+    callback remove-field(int);
+    callback update-field(int, FieldRow);
+    pure callback strength(string) -> Strength;
+    callback generate(GeneratorOptions) -> string;
+
+    // Secure notes
+    callback unlock-notes(string);
+    callback lock-notes();
+    callback save-note(NoteRow);
+    callback delete-note(string);
+
+    // Vault settings
+    callback open-settings();
+    callback close-settings();
+    callback change-master-password(string, string, string);
+    callback change-notes-password(string, string, string);
+    callback rotate-recovery-key();
+    callback import-file();
+    callback restore-backup(string);
+    callback export-backup(string, string);
+    callback export-csv();
+
+    // Sync: url, email, device name, master password, invite code, create (vs sign in)
+    callback sync-setup(string, string, string, string, string, bool);
+    callback sync-now();
+    callback sync-sign-in-again(string);
+    callback sync-finish-recovery(string);
+    callback sync-sign-out();
+    callback sync-load-devices();
+    callback sync-revoke-device(string);
+    callback show-download();
+    callback cancel-download();
+    // url, email, device name, master password
+    callback download-vault(string, string, string, string);
+
+    /// Any user interaction; resets the auto-lock timer.
+    callback activity();
+}

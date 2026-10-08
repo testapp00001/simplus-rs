@@ -1,0 +1,16 @@
+# Example configuration for simplus-sync-server. Every key is optional; environment
+# variables SIMPLUS_BIND, SIMPLUS_DATABASE, SIMPLUS_REGISTRATION and SIMPLUS_TRUST_PROXY
+# override the file. Run `simplus-sync-server --config simplus-sync.toml config` to check.
+
+bind = "127.0.0.1:8080"          # keep it local and put a TLS reverse proxy in front
+database = "/var/lib/simplus/simplus-sync.db"
+registration = "open"            # open | invite | closed
+trust_proxy = true               # only when behind a reverse proxy you control
+
+max_items_per_account = 50000
+max_blob_bytes = 262144          # 256 KiB per encrypted item
+max_body_bytes = 16777216        # 16 MiB per request
+session_ttl_days = 90
+auth_requests_per_minute = 30    # per client IP, for login/registration/recovery
+lockout_threshold = 10           # failed logins before a temporary lock
+lockout_minutes = 15
